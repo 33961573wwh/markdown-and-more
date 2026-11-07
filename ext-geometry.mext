@@ -1,0 +1,1107 @@
+/* =========================================================
+ * 几何作图扩展  (ext-geometry.mext)
+ * ---------------------------------------------------------
+ * 声明式几何 DSL：先定义点，再连线、画圆、标角，自动输出 SVG。
+ *
+ *   ```geometry
+ *   point A = (0, 0)
+ *   point B = (4, 0)
+ *   point C = (1, 3)
+ *   polygon A B C fill
+ *   point O = circumcenter(A, B, C)
+ *   circle O through A
+ *   right A B C        # 直角标记
+ *   title 三角形与外接圆
+ *   ```
+ *
+ * 也支持 :::geometry … ::: 容器写法。
+ * 特性：
+ *   - 安全表达式求值（sqrt / pi / sin / cos / …），不使用 eval
+ *   - 派生点：midpoint / lerp / circumcenter / centroid / foot /
+ *             reflect / rotate / intersect / translate / polar
+ *   - 图形：segment / line / ray / polyline / polygon / circle /
+ *           arc / angle / right / tick / text
+ *   - 自动取景（等比不失真），可选坐标轴网格、固定比例、手动视窗
+ *   - 明暗主题自适应；导出的 HTML 保留图形与样式（纯内联 SVG）
+ *   - 与「代码高亮」「洛谷新特性」「容器块」扩展互不冲突
+ * ========================================================= */
+api.register({
+  name: '几何作图',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '定义点后连线、画圆、标角，用 ```geometry 代码块渲染 SVG 几何图',
+  icon: '📐',
+
+  init: function (ctx) {
+
+    /* ---------------- 样式（id 以 -ext-style 结尾，导出时会被收集） ---------------- */
+    var STYLE_ID = 'geo-ext-style';
+    var CSS = [
+      '.geo-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden}',
+      '.geo-figure svg{display:block;width:100%;height:auto;margin:0 auto}',
+      '.geo-bg{fill:var(--panel,#fff)}',
+      '.geo-grid{stroke:var(--line,#e6e2da);stroke-width:1}',
+      '.geo-axis{stroke:var(--line-strong,#d8d3c8);stroke-width:1.4}',
+      '.geo-axis-lab{fill:var(--muted,#8d8880);font:italic 11px Georgia,serif}',
+      '.geo-grid-num{fill:var(--muted,#8d8880);font:10px Consolas,Menlo,monospace;opacity:.8}',
+      '.geo-ln{stroke:var(--text,#221f1b);stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round}',
+      '.geo-shape{fill:none;stroke:var(--text,#221f1b);stroke-width:1.8;stroke-linejoin:round}',
+      '.geo-fill{fill:var(--accent,#c2410c);opacity:.1;stroke:none}',
+      '.geo-dot{fill:var(--accent,#c2410c);stroke:var(--panel,#fff);stroke-width:1.2}',
+      '.geo-lab{fill:var(--text,#221f1b);font:italic 13px Georgia,"Times New Roman",serif}',
+      '.geo-txt{fill:var(--text-soft,#4a453f);font:12px -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}',
+      '.geo-aux{stroke:var(--muted,#8d8880);stroke-width:1.2;fill:none;stroke-linejoin:round}',
+      '.geo-arc{stroke:var(--accent,#c2410c);stroke-width:1.5;fill:none}',
+      '.geo-figcap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}',
+      '.geo-figcap p{margin:0}',
+      '.geo-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}',
+      '.geo-errbox b{font-weight:650}',
+      '.geo-picker{display:flex;flex-direction:column;gap:.8em}',
+      '.geo-picker .geo-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}',
+      '.geo-picker .geo-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4rem}',
+      '.geo-picker .geo-grid2 button{justify-content:flex-start;text-align:left}',
+      '.geo-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}'
+    ].join('\n');
+
+    function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID;
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    ensureStyle();
+
+    /* ---------------- 基础工具 ---------------- */
+    var PH = String.fromCharCode(2);       // 字符串占位符前缀
+    var NL = String.fromCharCode(10);
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function n2(v) {
+      var x = Number(v);
+      if (!isFinite(x)) x = 0;
+      return String(Math.round(x * 100) / 100);
+    }
+    function isName(s) {
+      if (!s || typeof s !== 'string') return false;
+      var c0 = s.charCodeAt(0);
+      if (!((c0 >= 65 && c0 <= 90) || (c0 >= 97 && c0 <= 122) || c0 === 95 || c0 > 127)) return false;
+      for (var i = 1; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        if (!((c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) ||
+              c === 95 || c === 39 || c > 127)) return false;
+      }
+      return true;
+    }
+    function safeColor(v) {
+      if (!v || v === true) return '';
+      var s = String(v).trim();
+      if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+      if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(s)) return s;
+      if (/^var\(--[a-z-]+(?:,\s*#[0-9a-fA-F]{3,8})?\)$/.test(s)) return s;
+      return '';
+    }
+    function expandStr(s, strs) {
+      var out = '', i = 0;
+      while (i < s.length) {
+        if (s.charAt(i) === PH) {
+          var j = i + 1, k = '';
+          while (j < s.length && s.charAt(j) >= '0' && s.charAt(j) <= '9') { k += s.charAt(j); j++; }
+          if (k !== '') { out += (strs[+k] == null ? '' : strs[+k]); i = j; continue; }
+        }
+        out += s.charAt(i); i++;
+      }
+      return out;
+    }
+    function stripComment(s) {
+      var q = null, out = '';
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (q) { out += c; if (c === q) q = null; continue; }
+        if (c === '"' || c === "'") { q = c; out += c; continue; }
+        // # 或 // 只有位于行首 / 空白之后才是注释（color=#c2410c 里的是颜色）
+        var prev = i > 0 ? s.charAt(i - 1) : ' ';
+        var afterSpace = (i === 0 || /\s/.test(prev));
+        if ((c === '#' || (c === '/' && s.charAt(i + 1) === '/')) && afterSpace) break;
+        out += c;
+      }
+      return out;
+    }
+    function compactParens(s) {
+      var d = 0, out = '';
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '(') d++;
+        if (d > 0 && c === ' ') continue;
+        if (c === ')') d--;
+        out += c;
+      }
+      return out;
+    }
+    // 词法：先抽出带引号的字符串，再压缩括号内的空格，最后按空白切词
+    function lex(line, strs) {
+      var s = stripComment(String(line == null ? '' : line));
+      var out = [], cur = '', i = 0;
+      function flush() { if (cur) { out.push(cur); cur = ''; } }
+      while (i < s.length) {
+        var c = s.charAt(i);
+        if (c === '"' || c === "'") {
+          // 不 flush：让引号内容并入当前词（label="A₁" 应保持为一个 token）
+          var q = c, v = ''; i++;
+          while (i < s.length && s.charAt(i) !== q) {
+            if (s.charAt(i) === '\\' && i + 1 < s.length) { v += s.charAt(i + 1); i += 2; }
+            else { v += s.charAt(i); i++; }
+          }
+          i++;
+          strs.push(v);
+          cur += PH + (strs.length - 1);
+          continue;
+        }
+        if (/\s/.test(c)) { flush(); i++; continue; }
+        cur += c; i++;
+      }
+      flush();
+      var joined = compactParens(out.join(' ')).trim();
+      if (!joined) return [];
+      return joined.split(/\s+/).map(function (t) { return expandStr(t, strs); });
+    }
+    function splitArgs(s) {
+      var d = 0, out = [], cur = '';
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === '(') d++;
+        if (c === ')') d--;
+        if (c === ',' && d === 0) { out.push(cur); cur = ''; continue; }
+        cur += c;
+      }
+      if (cur || out.length) out.push(cur);
+      return out;
+    }
+
+    /* ---------------- 安全的数值表达式求值（递归下降，无 eval） ---------------- */
+    var CONST = { pi: Math.PI, e: Math.E, tau: 2 * Math.PI };
+    var FUNC = {
+      sqrt: { n: 1, f: function (a) { return Math.sqrt(a[0]); } },
+      abs:  { n: 1, f: function (a) { return Math.abs(a[0]); } },
+      sign: { n: 1, f: function (a) { return Math.sign ? Math.sign(a[0]) : (a[0] > 0 ? 1 : a[0] < 0 ? -1 : 0); } },
+      sin:  { n: 1, f: function (a) { return Math.sin(a[0]); } },
+      cos:  { n: 1, f: function (a) { return Math.cos(a[0]); } },
+      tan:  { n: 1, f: function (a) { return Math.tan(a[0]); } },
+      sind: { n: 1, f: function (a) { return Math.sin(a[0] * Math.PI / 180); } },
+      cosd: { n: 1, f: function (a) { return Math.cos(a[0] * Math.PI / 180); } },
+      tand: { n: 1, f: function (a) { return Math.tan(a[0] * Math.PI / 180); } },
+      asin: { n: 1, f: function (a) { return Math.asin(a[0]); } },
+      acos: { n: 1, f: function (a) { return Math.acos(a[0]); } },
+      atan: { n: 1, f: function (a) { return Math.atan(a[0]); } },
+      atan2:{ n: 2, f: function (a) { return Math.atan2(a[0], a[1]); } },
+      exp:  { n: 1, f: function (a) { return Math.exp(a[0]); } },
+      ln:   { n: 1, f: function (a) { return Math.log(a[0]); } },
+      log:  { n: 1, f: function (a) { return Math.log(a[0]) / Math.LN10; } },
+      floor:{ n: 1, f: function (a) { return Math.floor(a[0]); } },
+      ceil: { n: 1, f: function (a) { return Math.ceil(a[0]); } },
+      round:{ n: 1, f: function (a) { return Math.round(a[0]); } },
+      min:  { n: -1, f: function (a) { return Math.min.apply(Math, a); } },
+      max:  { n: -1, f: function (a) { return Math.max.apply(Math, a); } },
+      pow:  { n: 2, f: function (a) { return Math.pow(a[0], a[1]); } },
+      hypot:{ n: -1, f: function (a) { var s = 0; for (var i = 0; i < a.length; i++) s += a[i] * a[i]; return Math.sqrt(s); } },
+      rad:  { n: 1, f: function (a) { return a[0] * Math.PI / 180; } },
+      deg:  { n: 1, f: function (a) { return a[0] * 180 / Math.PI; } }
+    };
+    function evalExpr(src) {
+      var s = String(src == null ? '' : src).replace(/\s+/g, ''), i = 0;
+      function peek() { return s.charAt(i); }
+      function readNum() {
+        var j = i, dot = false, ex = false;
+        while (j < s.length) {
+          var c = s.charAt(j);
+          if (c >= '0' && c <= '9') { j++; continue; }
+          if (c === '.' && !dot && !ex) { dot = true; j++; continue; }
+          if ((c === 'e' || c === 'E') && !ex) {
+            ex = true; j++;
+            if (s.charAt(j) === '+' || s.charAt(j) === '-') j++;
+            continue;
+          }
+          break;
+        }
+        if (j === i) return null;
+        var v = parseFloat(s.slice(i, j));
+        i = j;
+        return v;
+      }
+      function isLetter(c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c === '_'; }
+      function readIdent() {
+        var j = i;
+        while (j < s.length && (isLetter(s.charAt(j)) || (s.charAt(j) >= '0' && s.charAt(j) <= '9'))) j++;
+        if (j === i) return '';
+        var v = s.slice(i, j); i = j; return v;
+      }
+      function primary() {
+        if (peek() === '(') {
+          i++; var v = expr();
+          if (peek() !== ')') throw new Error('缺少右括号');
+          i++; return v;
+        }
+        var num = readNum();
+        if (num !== null) return num;
+        var id = readIdent();
+        if (!id) throw new Error('无法解析的数值：' + s.slice(i, i + 8));
+        if (peek() === '(') {
+          i++;
+          var args = [], cur = '', d = 0;
+          while (i < s.length) {
+            var c = s.charAt(i);
+            if (c === '(') d++;
+            if (c === ')') { if (d === 0) { i++; break; } d--; }
+            if (c === ',' && d === 0) { args.push(cur); cur = ''; i++; continue; }
+            cur += c; i++;
+          }
+          if (cur || args.length) args.push(cur);
+          var key = id.toLowerCase(), spec = FUNC[key];
+          if (!spec) throw new Error('未知函数 ' + id);
+          var vals = args.map(function (a) { return evalExpr(a); });
+          if (spec.n > 0 && vals.length !== spec.n) throw new Error(id + ' 需要 ' + spec.n + ' 个参数');
+          return spec.f(vals);
+        }
+        if (Object.prototype.hasOwnProperty.call(CONST, id.toLowerCase())) return CONST[id.toLowerCase()];
+        throw new Error('未知常量或函数 ' + id);
+      }
+      function power() {
+        var v = primary();
+        if (peek() === '^') { i++; return Math.pow(v, unary()); }
+        return v;
+      }
+      function unary() {
+        if (peek() === '-') { i++; return -unary(); }
+        if (peek() === '+') { i++; return unary(); }
+        return power();
+      }
+      function term() {
+        var v = unary();
+        while (peek() === '*' || peek() === '/') {
+          var op = s.charAt(i++), r = unary();
+          v = op === '*' ? v * r : v / r;
+        }
+        return v;
+      }
+      function expr() {
+        var v = term();
+        while (peek() === '+' || peek() === '-') {
+          var op = s.charAt(i++), r = term();
+          v = op === '+' ? v + r : v - r;
+        }
+        return v;
+      }
+      var out = expr();
+      if (i < s.length) throw new Error('表达式多余内容：' + s.slice(i));
+      if (!isFinite(out)) throw new Error('表达式结果不是有限数');
+      return out;
+    }
+    function numQ(v, dflt) {
+      if (v == null || v === '' || v === true) return dflt;
+      try { var n = evalExpr(v); return isFinite(n) ? n : dflt; } catch (e) { return dflt; }
+    }
+    function needNum(v, what) {
+      if (v == null || v === '' || v === true) throw new Error('缺少' + what);
+      return evalExpr(v);
+    }
+
+    /* ---------------- 向量小工具 ---------------- */
+    function V(x, y) { return { x: x, y: y }; }
+    function sub(a, b) { return V(a.x - b.x, a.y - b.y); }
+    function add(a, b) { return V(a.x + b.x, a.y + b.y); }
+    function mul(a, k) { return V(a.x * k, a.y * k); }
+    function dot(a, b) { return a.x * b.x + a.y * b.y; }
+    function cross(a, b) { return a.x * b.y - a.y * b.x; }
+    function len(a) { return Math.sqrt(dot(a, a)); }
+    function dist(a, b) { return len(sub(a, b)); }
+    function unit(a) { var l = len(a); return l < 1e-12 ? V(0, 0) : mul(a, 1 / l); }
+
+    /* ---------------- 场景 ---------------- */
+    function newScene() {
+      return {
+        W: 480, H: 360, scale: 0, view: null, margin: 0.6,
+        grid: false, gridNumbers: true, axes: false, labels: true, title: '',
+        points: {}, order: [], prims: [], errs: [],
+        b: { on: false, xmin: 0, xmax: 0, ymin: 0, ymax: 0 }
+      };
+    }
+    function err(sc, ln, msg) { sc.errs.push({ line: ln, msg: msg }); }
+    function addB(sc, x, y) {
+      if (!isFinite(x) || !isFinite(y)) return;
+      var b = sc.b;
+      if (!b.on) { b.on = true; b.xmin = b.xmax = x; b.ymin = b.ymax = y; return; }
+      if (x < b.xmin) b.xmin = x; if (x > b.xmax) b.xmax = x;
+      if (y < b.ymin) b.ymin = y; if (y > b.ymax) b.ymax = y;
+    }
+    function addCB(sc, x, y, r) { addB(sc, x - r, y - r); addB(sc, x + r, y + r); }
+
+    function parseCoord(t) {
+      if (typeof t !== 'string' || t.charAt(0) !== '(' || t.charAt(t.length - 1) !== ')') return null;
+      var a = splitArgs(t.slice(1, -1));
+      if (a.length !== 2) throw new Error('坐标需要 (x, y) 两个数');
+      return V(evalExpr(a[0]), evalExpr(a[1]));
+    }
+    function funcParts(t) {
+      var k = t.indexOf('(');
+      if (k < 1 || t.charAt(t.length - 1) !== ')') return null;
+      var name = t.slice(0, k).toLowerCase();
+      if (!/^[a-z_][a-z0-9_]*$/.test(name)) return null;
+      return { name: name, args: splitArgs(t.slice(k + 1, -1)) };
+    }
+    function getPoint(sc, t) {
+      if (typeof t !== 'string') throw new Error('无效的点引用');
+      if (t.charAt(0) === '(') { var c = parseCoord(t); if (!c) throw new Error('坐标格式错误：' + t); return c; }
+      if (!isName(t)) throw new Error('不是合法的点名：' + t);
+      if (!Object.prototype.hasOwnProperty.call(sc.points, t)) throw new Error('未定义的点 ' + t + '（请先定义）');
+      return sc.points[t];
+    }
+    // 支持 A-B-C、A,B 这类连写，以及 (1,2) 匿名坐标
+    function pointChain(sc, main) {
+      var out = [];
+      for (var k = 0; k < main.length; k++) {
+        var t = main[k];
+        if (typeof t === 'string' && t.charAt(0) === '(') { out.push(getPoint(sc, t)); continue; }
+        var parts = String(t).split(/[-,]/);
+        if (parts.length > 1 && parts.every(isName)) {
+          for (var j = 0; j < parts.length; j++) out.push(getPoint(sc, parts[j]));
+        } else {
+          out.push(getPoint(sc, t));
+        }
+      }
+      return out;
+    }
+
+    /* ---------------- 派生点 ---------------- */
+    function derive(f, sc) {
+      var a = f.args, P = function (k) { return getPoint(sc, a[k]); };
+      var N = function (k) { return needNum(a[k], '数值参数'); };
+      switch (f.name) {
+        case 'polar': {
+          var r = N(0), ang = N(1) * Math.PI / 180;
+          return V(r * Math.cos(ang), r * Math.sin(ang));
+        }
+        case 'midpoint': case 'mid': {
+          var p = P(0), q = P(1); return mul(add(p, q), 0.5);
+        }
+        case 'lerp': case 'on': case 'extend': {
+          var p2 = P(0), q2 = P(1), t2 = N(2);
+          return add(p2, mul(sub(q2, p2), t2));
+        }
+        case 'translate': {
+          return add(P(0), V(N(1), N(2)));
+        }
+        case 'centroid': {
+          var cx = 0, cy = 0, cnt = Math.min(a.length, 8);
+          for (var i = 0; i < cnt; i++) { var pp = P(i); cx += pp.x; cy += pp.y; }
+          return V(cx / cnt, cy / cnt);
+        }
+        case 'circumcenter': case 'circumcentre': {
+          var A = P(0), B = P(1), C = P(2);
+          var d = 2 * (A.x * (B.y - C.y) + B.x * (C.y - A.y) + C.x * (A.y - B.y));
+          if (Math.abs(d) < 1e-12) throw new Error('三点共线，无法求外心');
+          var a2 = A.x * A.x + A.y * A.y, b2 = B.x * B.x + B.y * B.y, c2 = C.x * C.x + C.y * C.y;
+          return V((a2 * (B.y - C.y) + b2 * (C.y - A.y) + c2 * (A.y - B.y)) / d,
+                   (a2 * (C.x - B.x) + b2 * (A.x - C.x) + c2 * (B.x - A.x)) / d);
+        }
+        case 'foot': case 'projection': {
+          var X = P(0), A2 = P(1), B2 = P(2), d2 = sub(B2, A2);
+          var dd = dot(d2, d2);
+          if (dd < 1e-12) throw new Error('直线两点重合');
+          return add(A2, mul(d2, dot(sub(X, A2), d2) / dd));
+        }
+        case 'reflect': {
+          var X2 = P(0), A3 = P(1), B3 = P(2), d3 = sub(B3, A3);
+          var dd3 = dot(d3, d3);
+          if (dd3 < 1e-12) throw new Error('对称轴两点重合');
+          var F = add(A3, mul(d3, dot(sub(X2, A3), d3) / dd3));
+          return sub(mul(F, 2), X2);
+        }
+        case 'rotate': {
+          var X3 = P(0), O = P(1), ang3 = N(2) * Math.PI / 180;
+          var v = sub(X3, O), cs = Math.cos(ang3), sn = Math.sin(ang3);
+          return add(O, V(v.x * cs - v.y * sn, v.x * sn + v.y * cs));
+        }
+        case 'intersect': case 'inter': {
+          var A4 = P(0), B4 = P(1), C4 = P(2), D4 = P(3);
+          var r = sub(B4, A4), s4 = sub(D4, C4), den = cross(r, s4);
+          if (Math.abs(den) < 1e-12) throw new Error('两直线平行，没有唯一交点');
+          return add(A4, mul(r, cross(sub(C4, A4), s4) / den));
+        }
+        default: throw new Error('未知的派生点函数 ' + f.name + '()');
+      }
+    }
+
+    /* ---------------- 命令分派 ---------------- */
+    var FLAGS = { dash: 1, hide: 1, nolabel: 1, arrow: 1, plain: 1, numbers: 1, nofill: 1, fill: 1 };
+    function splitCommand(toks) {
+      var cmd = String(toks[0]).toLowerCase(), main = [], o = {};
+      for (var k = 1; k < toks.length; k++) {
+        var t = toks[k], eq = t.indexOf('=');
+        if (eq > 0) o[t.slice(0, eq).toLowerCase()] = t.slice(eq + 1);
+        else if (Object.prototype.hasOwnProperty.call(FLAGS, t.toLowerCase())) o[t.toLowerCase()] = true;
+        else main.push(t);
+      }
+      return { cmd: cmd, main: main, o: o };
+    }
+    function styleOpts(o) {
+      return {
+        color: safeColor(o.color || o.c || o.stroke),
+        width: numQ(o.width || o.w, 0),
+        dash: o.dash === true ? '6 4' : (typeof o.dash === 'string' ? o.dash : ''),
+        fill: o.fill === true ? 'var(--accent,#c2410c)' : safeColor(o.fill),
+        opacity: numQ(o.opacity, 0.1),
+        size: numQ(o.size, 0),
+        label: o.label == null ? null : String(o.label),
+        pos: (o.pos || 'ne').toLowerCase(),
+        r: o.r == null ? null : numQ(o.r, 0),
+        n: numQ(o.n, 1),
+        hide: !!o.hide, nolabel: !!o.nolabel, arrow: !!o.arrow, nofill: !!o.nofill
+      };
+    }
+    function applySetting(sc, c) {
+      var m = c.main, o = c.o;
+      switch (c.cmd) {
+        case 'size': {
+          var s = m[0] || '';
+          var p = s.split(/[x×*]/);
+          sc.W = Math.max(160, Math.min(1200, p.length > 1 ? numQ(p[0], 480) : numQ(s, 480)));
+          sc.H = Math.max(120, Math.min(900, p.length > 1 ? numQ(p[1], 360) : numQ(m[1], 360)));
+          break;
+        }
+        case 'scale': sc.scale = needNum(m[0], 'scale 值'); break;
+        case 'margin': sc.margin = needNum(m[0], 'margin 值'); break;
+        case 'view': {
+          if (m.length < 4) throw new Error('view 需要 4 个数：xmin xmax ymin ymax');
+          sc.view = [needNum(m[0], 'xmin'), needNum(m[1], 'xmax'), needNum(m[2], 'ymin'), needNum(m[3], 'ymax')];
+          if (sc.view[1] <= sc.view[0] || sc.view[3] <= sc.view[2]) throw new Error('view 范围无效');
+          break;
+        }
+        case 'grid': {
+          var g = (m[0] || 'on').toLowerCase();
+          sc.grid = g !== 'off' && g !== 'false' && g !== '0';
+          sc.gridNumbers = !o.plain;
+          if (g === 'numbers' || o.numbers) sc.gridNumbers = true;
+          if (sc.grid) sc.axes = true;
+          break;
+        }
+        case 'axes': {
+          var ax = (m[0] || 'on').toLowerCase();
+          sc.axes = ax !== 'off' && ax !== 'false' && ax !== '0';
+          break;
+        }
+        case 'labels': {
+          var lb = (m[0] || 'on').toLowerCase();
+          sc.labels = lb !== 'off' && lb !== 'false' && lb !== '0';
+          break;
+        }
+        case 'title': case 'caption': sc.title = m.join(' '); break;
+        default: throw new Error('未知设置 ' + c.cmd);
+      }
+    }
+    function addPoint(sc, c, ln) {
+      var m = c.main, o = c.o, name, rhs;
+      if (m[0] === 'point' || m[0] === 'pt') {
+        name = m[1]; rhs = m[2] === '=' ? m[3] : m[2];
+      } else if (m[1] === '=') {
+        name = m[0]; rhs = m[2];
+      } else {
+        throw new Error('点定义格式应为 point A = (x, y) 或 A = (x, y)');
+      }
+      if (!isName(name)) throw new Error('非法点名：' + name);
+      if (!rhs) throw new Error('缺少坐标或派生表达式');
+      var p;
+      if (rhs.charAt(0) === '(') {
+        p = parseCoord(rhs);
+        if (!p) throw new Error('坐标格式错误：' + rhs);
+      } else {
+        var fp = funcParts(rhs);
+        if (fp) p = derive(fp, sc);
+        else if (isName(rhs)) p = getPoint(sc, rhs);
+        else throw new Error('无法识别的坐标：' + rhs);
+      }
+      var st = styleOpts(o);
+      sc.points[name] = {
+        x: p.x, y: p.y, name: name,
+        label: st.label == null ? name : st.label,
+        pos: o.pos ? st.pos : 'ne',
+        hide: st.hide, nolabel: st.nolabel,
+        color: st.color, size: st.size || 3.6
+      };
+      sc.order.push(name);
+      addB(sc, p.x, p.y);
+    }
+    function addPrim(sc, c, ln) {
+      var m = c.main, o = c.o, st = styleOpts(o);
+      var cmd = c.cmd;
+      if (cmd === 'segment' || cmd === 'seg' || cmd === 'line' || cmd === 'ray' ||
+          cmd === 'polyline' || cmd === 'polygon' || cmd === 'poly' || cmd === 'arc' ||
+          cmd === 'angle' || cmd === 'right' || cmd === 'tick') {
+        var mainPts = m, extra = m[m.length - 1];
+        // tick A B 3：末尾纯数字是刻痕数，不是点名
+        if (cmd === 'tick' && /^[0-9]+$/.test(extra)) {
+          st.n = parseFloat(extra);
+          mainPts = m.slice(0, -1);
+        }
+        if (!mainPts.length) throw new Error(cmd + ' 至少需要两个点');
+        var pts = pointChain(sc, mainPts);
+        var minPts = (cmd === 'polygon' || cmd === 'poly' || cmd === 'arc' || cmd === 'angle' || cmd === 'right') ? 3 : 2;
+        if (pts.length < minPts) throw new Error(cmd + ' 需要 ' + minPts + ' 个点');
+        for (var i = 0; i < pts.length; i++) addB(sc, pts[i].x, pts[i].y);
+        sc.prims.push({ type: cmd, pts: pts, o: st, raw: o });
+        if (cmd === 'right' || cmd === 'angle') {
+          var label = st.label;
+          if (label) sc.prims[sc.prims.length - 1].label = label;
+        }
+        return;
+      }
+      if (cmd === 'circle' || cmd === 'circ') {
+        var through = m.indexOf('through'), diam = m.indexOf('diameter');
+        var center, r;
+        if (diam >= 0) {
+          var dp = pointChain(sc, m.slice(0, diam).concat(m.slice(diam + 1)));
+          if (dp.length < 2) throw new Error('circle diameter 需要两个端点');
+          center = mul(add(dp[0], dp[1]), 0.5); r = dist(dp[0], dp[1]) / 2;
+        } else if (through >= 0) {
+          center = getPoint(sc, m[0]);
+          r = dist(center, getPoint(sc, m[through + 1]));
+        } else {
+          if (!m.length) throw new Error('circle 需要圆心');
+          center = getPoint(sc, m[0]);
+          var rv = o.r != null ? o.r : m[1];
+          if (rv == null) throw new Error('circle 需要半径，例如 circle O 2 或 circle O through A');
+          if (isName(rv) && Object.prototype.hasOwnProperty.call(sc.points, rv)) r = dist(center, getPoint(sc, rv));
+          else r = needNum(rv, '半径');
+        }
+        if (!(r > 0) || !isFinite(r)) throw new Error('圆的半径必须是正数');
+        addB(sc, center.x, center.y); addCB(sc, center.x, center.y, r);
+        sc.prims.push({ type: 'circle', pts: [center], r: r, o: st });
+        return;
+      }
+      if (cmd === 'text' || cmd === 'label') {
+        if (!m.length) throw new Error('text 需要一个坐标或点名');
+        var anchor = getPoint(sc, m[0]);
+        var body = m.slice(1).join(' ');
+        if (!body) throw new Error('text 缺少文字内容（用引号包起来）');
+        addB(sc, anchor.x, anchor.y);
+        sc.prims.push({ type: 'text', pts: [anchor], text: body, o: st });
+        return;
+      }
+      throw new Error('未知命令 ' + cmd);
+    }
+    var SETTINGS = { size: 1, scale: 1, margin: 1, view: 1, grid: 1, axes: 1, labels: 1, title: 1, caption: 1 };
+    function isPointDef(c) {
+      return (c.main[0] === 'point' || c.main[0] === 'pt' || c.main[1] === '=') &&
+             !Object.prototype.hasOwnProperty.call(SETTINGS, c.cmd);
+    }
+
+    /* ---------------- 取景与坐标变换 ---------------- */
+    function niceStep(r) {
+      if (!(r > 0) || !isFinite(r)) return 1;
+      var e = Math.pow(10, Math.floor(Math.log(r) / Math.LN10)), f = r / e;
+      return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * e;
+    }
+    function makeView(sc) {
+      var W = sc.W, H = sc.H, xmin, xmax, ymin, ymax, s;
+      if (sc.view) {
+        xmin = sc.view[0]; xmax = sc.view[1]; ymin = sc.view[2]; ymax = sc.view[3];
+        s = Math.min(W / (xmax - xmin), H / (ymax - ymin));
+        // 以短边为准，另一侧居中留白
+        var cx0 = (xmin + xmax) / 2, cy0 = (ymin + ymax) / 2;
+        xmin = cx0 - W / (2 * s); xmax = cx0 + W / (2 * s);
+        ymin = cy0 - H / (2 * s); ymax = cy0 + H / (2 * s);
+      } else if (sc.scale > 0) {
+        s = sc.scale;
+        var b = sc.b, cx = b.on ? (b.xmin + b.xmax) / 2 : 0, cy = b.on ? (b.ymin + b.ymax) / 2 : 0;
+        xmin = cx - W / (2 * s); xmax = cx + W / (2 * s);
+        ymin = cy - H / (2 * s); ymax = cy + H / (2 * s);
+      } else {
+        var bb = sc.b;
+        if (!bb.on) { bb = { xmin: -3, xmax: 3, ymin: -2, ymax: 2 }; }
+        var pad = Math.max(0, sc.margin);
+        xmin = bb.xmin - pad; xmax = bb.xmax + pad;
+        ymin = bb.ymin - pad; ymax = bb.ymax + pad;
+        if (xmax - xmin < 1e-6) { xmin -= 1; xmax += 1; }
+        if (ymax - ymin < 1e-6) { ymin -= 1; ymax += 1; }
+        var bw = xmax - xmin, bh = ymax - ymin, ar = W / H;
+        if (bw / bh > ar) { var need = bw / ar; ymin -= (need - bh) / 2; ymax += (need - bh) / 2; }
+        else { var need2 = bh * ar; xmin -= (need2 - bw) / 2; xmax += (need2 - bw) / 2; }
+        s = W / (xmax - xmin);
+      }
+      return {
+        W: W, H: H, s: s, xmin: xmin, xmax: xmax, ymin: ymin, ymax: ymax,
+        X: function (x) { return (x - xmin) * s; },
+        Y: function (y) { return (ymax - y) * s; }
+      };
+    }
+    function gridSvg(sc, v) {
+      if (!sc.grid && !sc.axes) return '';
+      var out = '', step = niceStep((v.xmax - v.xmin) / 8);
+      var eps = step * 1e-6;
+      if (sc.grid) {
+        for (var x = Math.ceil(v.xmin / step) * step; x <= v.xmax + eps; x += step) {
+          var px = n2(v.X(x));
+          out += '<line class="geo-grid" x1="' + px + '" y1="0" x2="' + px + '" y2="' + v.H + '"/>';
+        }
+        for (var y = Math.ceil(v.ymin / step) * step; y <= v.ymax + eps; y += step) {
+          var py = n2(v.Y(y));
+          out += '<line class="geo-grid" x1="0" y1="' + py + '" x2="' + v.W + '" y2="' + py + '"/>';
+        }
+      }
+      var hasX0 = v.xmin <= 0 && v.xmax >= 0, hasY0 = v.ymin <= 0 && v.ymax >= 0;
+      if (sc.axes && hasY0) out += '<line class="geo-axis" x1="' + n2(v.X(0)) + '" y1="0" x2="' + n2(v.X(0)) + '" y2="' + v.H + '"/>';
+      if (sc.axes && hasX0) out += '<line class="geo-axis" x1="0" y1="' + n2(v.Y(0)) + '" x2="' + v.W + '" y2="' + n2(v.Y(0)) + '"/>';
+      if (sc.grid && sc.gridNumbers) {
+        var baseY = hasX0 ? Math.min(Math.max(v.Y(0) + 12, 12), v.H - 4) : v.H - 5;
+        var baseX = hasY0 ? Math.min(Math.max(v.X(0) + 5, 4), v.W - 30) : 5;
+        for (var x2 = Math.ceil(v.xmin / step) * step; x2 <= v.xmax + eps; x2 += step) {
+          if (Math.abs(x2) < eps) continue;
+          out += '<text class="geo-grid-num" x="' + n2(v.X(x2) + 3) + '" y="' + baseY + '">' + esc(n2(x2)) + '</text>';
+        }
+        for (var y2 = Math.ceil(v.ymin / step) * step; y2 <= v.ymax + eps; y2 += step) {
+          if (Math.abs(y2) < eps) continue;
+          out += '<text class="geo-grid-num" x="' + baseX + '" y="' + n2(v.Y(y2) - 3) + '">' + esc(n2(y2)) + '</text>';
+        }
+      }
+      if (sc.axes && hasX0) out += '<text class="geo-axis-lab" x="' + (v.W - 12) + '" y="' + n2(Math.min(Math.max(v.Y(0) - 6, 12), v.H - 4)) + '">x</text>';
+      if (sc.axes && hasY0) out += '<text class="geo-axis-lab" x="' + n2(Math.min(Math.max(v.X(0) + 7, 5), v.W - 14)) + '" y="12">y</text>';
+      return '<g class="geo-grid-layer">' + out + '</g>';
+    }
+
+    /* ---------------- SVG 元素 ---------------- */
+    function strokeStyle(o) {
+      var a = [];
+      if (o.color) a.push('stroke:' + o.color);
+      if (o.width) a.push('stroke-width:' + n2(o.width));
+      return a.join(';');
+    }
+    function common(o) {
+      return (strokeStyle(o) ? ' style="' + esc(strokeStyle(o)) + '"' : '') +
+             (o.dash ? ' stroke-dasharray="' + esc(o.dash) + '"' : '');
+    }
+    function titleTag(t) { return t ? '<title>' + esc(t) + '</title>' : ''; }
+    function lineTag(x1, y1, x2, y2, cls, o, t) {
+      return '<line class="' + cls + '" x1="' + n2(x1) + '" y1="' + n2(y1) +
+             '" x2="' + n2(x2) + '" y2="' + n2(y2) + '"' + common(o) + '>' + titleTag(t) + '</line>';
+    }
+    function polyTag(pts, cls, o, t, close) {
+      var d = pts.map(function (p) { return n2(p.x) + ',' + n2(p.y); }).join(' ');
+      return '<' + (close ? 'polygon' : 'polyline') + ' class="' + cls + '" points="' + d + '"' +
+             common(o) + '>' + titleTag(t) + '</' + (close ? 'polygon' : 'polyline') + '>';
+    }
+    function clipSegment(p0, p1, mode, W, H) {
+      var dx = p1.x - p0.x, dy = p1.y - p0.y;
+      var t0 = mode === 'line' ? -1e9 : 0, t1 = mode === 'segment' ? 1 : 1e9;
+      var dims = [[p0.x, dx, 0, W], [p0.y, dy, 0, H]];
+      for (var i = 0; i < 2; i++) {
+        var p = dims[i][0], d = dims[i][1], lo = dims[i][2], hi = dims[i][3];
+        if (Math.abs(d) < 1e-12) { if (p < lo || p > hi) return null; }
+        else {
+          var a = (lo - p) / d, b = (hi - p) / d;
+          t0 = Math.max(t0, Math.min(a, b)); t1 = Math.min(t1, Math.max(a, b));
+        }
+      }
+      if (t0 > t1) return null;
+      return [V(p0.x + t0 * dx, p0.y + t0 * dy), V(p0.x + t1 * dx, p0.y + t1 * dy)];
+    }
+    function arcPath(c, a, b, radiusPx) {
+      var a1 = Math.atan2(a.y - c.y, a.x - c.x), a2 = Math.atan2(b.y - c.y, b.x - c.x);
+      var d = a2 - a1;
+      while (d <= -Math.PI) d += 2 * Math.PI;
+      while (d > Math.PI) d -= 2 * Math.PI;
+      return { d: 'M ' + n2(a.x) + ' ' + n2(a.y) + ' A ' + n2(radiusPx) + ' ' + n2(radiusPx) +
+                   ' 0 0 ' + (d > 0 ? 1 : 0) + ' ' + n2(b.x) + ' ' + n2(b.y), delta: d, a1: a1 };
+    }
+    function fillLayerFor(sc, v, shape, o, layer) {
+      if (o.nofill) return;
+      var fill = o.fill, opacity = o.opacity;
+      if (!fill && shape === 'polygon') { fill = 'var(--accent,#c2410c)'; opacity = 0.1; }
+      if (!fill) return;
+      var pts = o._pts.map(function (p) { return V(v.X(p.x), v.Y(p.y)); });
+      var d = pts.map(function (p) { return n2(p.x) + ',' + n2(p.y); }).join(' ');
+      if (shape === 'polygon') {
+        layer.push('<polygon class="geo-fill" points="' + d + '" style="fill:' + esc(fill) + ';opacity:' + n2(opacity) + '"/>');
+      } else {
+        layer.push('<circle class="geo-fill" cx="' + n2(v.X(o._pts[0].x)) + '" cy="' + n2(v.Y(o._pts[0].y)) +
+                   '" r="' + n2(o._r) + '" style="fill:' + esc(fill) + ';opacity:' + n2(opacity) + '"/>');
+      }
+    }
+    function arrowHead(from, to, o, layer) {
+      var u = unit(sub(to, from)), perp = V(-u.y, u.x), back = 9, wing = 4;
+      var base = sub(to, mul(u, back));
+      layer.push(polyTag([add(base, mul(perp, wing)), to, sub(base, mul(perp, wing))], 'geo-ln', o, '', false));
+    }
+
+    /* ---------------- 渲染整张图 ---------------- */
+    function renderFigure(lines) {
+      var sc = newScene(), entries = [];
+      for (var li = 0; li < lines.length; li++) {
+        var strs = [], toks;
+        try { toks = lex(lines[li], strs); }
+        catch (e) { err(sc, li + 1, e.message); continue; }
+        if (!toks.length) continue;
+        entries.push({ ln: li + 1, c: splitCommand(toks) });
+      }
+      // 1) 设置 → 2) 点定义 → 3) 图形（这样点可以写在图形之后）
+      var i, e2;
+      for (i = 0; i < entries.length; i++) {
+        e2 = entries[i];
+        if (!Object.prototype.hasOwnProperty.call(SETTINGS, e2.c.cmd)) continue;
+        try { applySetting(sc, e2.c); } catch (e) { err(sc, e2.ln, e.message); }
+      }
+      for (i = 0; i < entries.length; i++) {
+        e2 = entries[i];
+        if (Object.prototype.hasOwnProperty.call(SETTINGS, e2.c.cmd) || !isPointDef(e2.c)) continue;
+        try { addPoint(sc, e2.c, e2.ln); } catch (e) { err(sc, e2.ln, e.message); }
+      }
+      for (i = 0; i < entries.length; i++) {
+        e2 = entries[i];
+        if (Object.prototype.hasOwnProperty.call(SETTINGS, e2.c.cmd) || isPointDef(e2.c)) continue;
+        try { addPrim(sc, e2.c, e2.ln); } catch (e) { err(sc, e2.ln, e.message); }
+      }
+
+      var v = makeView(sc);
+      var L = { fill: [], shape: [], aux: [], dot: [], label: [] };
+
+      // 图形
+      for (i = 0; i < sc.prims.length; i++) {
+        var pr = sc.prims[i], o = pr.o, p = pr.pts;
+        var P = p.map(function (q) { return V(v.X(q.x), v.Y(q.y)); });
+        switch (pr.type) {
+          case 'segment': case 'seg': {
+            var seg = clipSegment(P[0], P[1], 'segment', v.W, v.H);
+            if (seg) L.shape.push(lineTag(seg[0].x, seg[0].y, seg[1].x, seg[1].y, 'geo-ln', o,
+              '线段 ' + p[0].name + '–' + p[1].name));
+            if (o.arrow && seg) arrowHead(seg[0], seg[1], o, L.shape);
+            break;
+          }
+          case 'line': case 'ray': {
+            var cl = clipSegment(P[0], P[1], pr.type === 'line' ? 'line' : 'ray', v.W, v.H);
+            if (cl) L.shape.push(lineTag(cl[0].x, cl[0].y, cl[1].x, cl[1].y, 'geo-ln', o,
+              (pr.type === 'line' ? '直线 ' : '射线 ') + (p[0].name || '') + (p[1].name || '')));
+            break;
+          }
+          case 'polyline': L.shape.push(polyTag(P, 'geo-shape', o, '折线', false)); break;
+          case 'polygon': case 'poly': {
+            fillLayerFor(sc, v, 'polygon', { _pts: p, fill: o.fill, opacity: o.opacity, nofill: o.nofill }, L.fill);
+            L.shape.push(polyTag(P, 'geo-shape', o, '多边形', true));
+            break;
+          }
+          case 'circle': {
+            fillLayerFor(sc, v, 'circle', { _pts: p, _r: pr.r * v.s, fill: o.fill, opacity: o.opacity, nofill: o.nofill }, L.fill);
+            L.shape.push('<circle class="geo-shape" cx="' + n2(P[0].x) + '" cy="' + n2(P[0].y) +
+              '" r="' + n2(pr.r * v.s) + '"' + common(o) + '>' + titleTag('圆，半径 ' + n2(pr.r)) + '</circle>');
+            break;
+          }
+          case 'arc': {
+            var ar = arcPath(P[0], P[1], P[2], dist(P[0], P[1]));
+            L.shape.push('<path class="geo-arc" d="' + ar.d + '"' + common(o) + '>' + titleTag('圆弧') + '</path>');
+            break;
+          }
+          case 'angle': {
+            var rpx = o.r ? o.r : 24;
+            var d1 = mul(unit(sub(P[0], P[1])), rpx), d2 = mul(unit(sub(P[2], P[1])), rpx);
+            var ag = arcPath(P[1], add(P[1], d1), add(P[1], d2), rpx);
+            L.aux.push('<path class="geo-arc" d="' + ag.d + '"' + common(o) + '>' + titleTag('角') + '</path>');
+            if (pr.label) {
+              var mid = ag.a1 + ag.delta / 2;
+              var tx = P[1].x + (rpx + 13) * Math.cos(mid), ty = P[1].y + (rpx + 13) * Math.sin(mid);
+              L.label.push('<text class="geo-txt" x="' + n2(tx) + '" y="' + n2(ty + 4) +
+                '" text-anchor="middle">' + esc(pr.label) + '</text>');
+            }
+            break;
+          }
+          case 'right': {
+            var sz = o.size || 14;
+            var u1 = unit(sub(P[0], P[1])), u2 = unit(sub(P[2], P[1]));
+            var q1 = add(P[1], mul(u1, sz)), q3 = add(P[1], mul(u2, sz));
+            L.aux.push(polyTag([q1, add(q1, mul(u2, sz)), q3], 'geo-aux', o, '直角', false));
+            break;
+          }
+          case 'tick': {
+            var mid = mul(add(P[0], P[1]), 0.5), u = unit(sub(P[1], P[0])), nrm = V(-u.y, u.x);
+            var cnt = Math.max(1, Math.min(4, Math.round(o.n)));
+            for (var k = 0; k < cnt; k++) {
+              var along = mul(u, (k - (cnt - 1) / 2) * 5);
+              var c = add(mid, along);
+              L.aux.push(lineTag(c.x - nrm.x * 5, c.y - nrm.y * 5, c.x + nrm.x * 5, c.y + nrm.y * 5,
+                'geo-aux', o, '等长刻痕'));
+            }
+            break;
+          }
+          case 'text': {
+            var pos = o.pos, off = { ne: [6, -6], nw: [-6, -6], se: [6, 14], sw: [-6, 14], n: [0, -8], s: [0, 15], e: [8, 4], w: [-8, 4] }[pos] || [6, -6];
+            var anchor = pos === 'n' || pos === 's' ? 'middle' : (pos.charAt(0) === 'w' || pos === 'nw' || pos === 'sw' ? 'end' : 'start');
+            L.label.push('<text class="geo-txt" x="' + n2(P[0].x + off[0]) + '" y="' + n2(P[0].y + off[1]) +
+              '" text-anchor="' + anchor + '"' + (o.color ? ' style="fill:' + esc(o.color) + '"' : '') +
+              (o.size ? ' font-size="' + n2(o.size) + '"' : '') + '>' + esc(pr.text) + '</text>');
+            break;
+          }
+        }
+      }
+
+      // 点与点名
+      for (i = 0; i < sc.order.length; i++) {
+        var pt = sc.points[sc.order[i]], px = v.X(pt.x), py = v.Y(pt.y);
+        if (!pt.hide) {
+          L.dot.push('<circle class="geo-dot" cx="' + n2(px) + '" cy="' + n2(py) + '" r="' + n2(pt.size) + '"' +
+            (pt.color ? ' style="fill:' + esc(pt.color) + '"' : '') + '>' +
+            titleTag(pt.name + ' (' + n2(pt.x) + ', ' + n2(pt.y) + ')') + '</circle>');
+        }
+        if (pt.hide || pt.nolabel || !sc.labels || !pt.label) continue;
+        var of = { ne: [7, -7], nw: [-7, -7], se: [7, 15], sw: [-7, 15], n: [0, -8], s: [0, 16], e: [9, 4], w: [-9, 4] }[pt.pos] || [7, -7];
+        var ta = pt.pos === 'n' || pt.pos === 's' ? 'middle' : (pt.pos.charAt(0) === 'w' || pt.pos === 'nw' || pt.pos === 'sw' ? 'end' : 'start');
+        L.label.push('<text class="geo-lab" x="' + n2(px + of[0]) + '" y="' + n2(py + of[1]) +
+          '" text-anchor="' + ta + '">' + esc(pt.label) + '</text>');
+      }
+
+      var svg = '<svg viewBox="0 0 ' + v.W + ' ' + v.H + '" xmlns="http://www.w3.org/2000/svg" ' +
+        'role="img" aria-label="' + esc('几何图：' + sc.order.length + ' 个点，' + sc.prims.length + ' 个图形') +
+        '" style="max-width:' + v.W + 'px">' +
+        '<title>' + esc(sc.title || '几何图') + '</title>' +
+        '<rect class="geo-bg" x="0" y="0" width="' + v.W + '" height="' + v.H + '"/>' +
+        gridSvg(sc, v) +
+        L.fill.join('') + L.shape.join('') + L.aux.join('') + L.dot.join('') + L.label.join('') +
+        '</svg>';
+
+      var out = '<div class="geo-figure">' + svg;
+      if (sc.title) out += '<div class="geo-figcap">' + ctx.md.inline(sc.title) + '</div>';
+      if (sc.errs.length) {
+        out += '<div class="geo-errbox"><b>⚠ 有 ' + sc.errs.length + ' 处需要检查：</b><br>' +
+          sc.errs.slice(0, 6).map(function (x) { return '第 ' + x.line + ' 行：' + esc(x.msg); }).join('<br>') +
+          '</div>';
+      }
+      return out + '</div>';
+    }
+
+    /* ---------------- 语法隔离：把 geometry 块改写成私有块 ----------------
+     * 代码高亮扩展会抢走所有 ``` 围栏，因此先在 preTransform 阶段把
+     * ```geometry / :::geometry 换成 %%%geo … %%%endgeo，与加载顺序无关。
+     */
+    var RE_OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(geometry|geo)\b([^`~]*)$/i;
+    var RE_ANY_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+    var RE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+    var RE_OPEN_CTR = /^\s{0,3}:::geometry\b(.*)$/i;
+    var RE_CLOSE_CTR = /^\s{0,3}:::\s*$/;
+
+    ctx.md.preTransform(function (text) {
+      var src = String(text == null ? '' : text).split('\n');
+      var out = [], i = 0;
+      while (i < src.length) {
+        var line = src[i], m = line.match(RE_OPEN_FENCE);
+        if (m) {
+          var ch = m[1].charAt(0), n = m[1].length, j = i + 1;
+          while (j < src.length) {
+            var cm = src[j].match(RE_CLOSE);
+            if (cm && cm[1].charAt(0) === ch && cm[1].length >= n) break;
+            j++;
+          }
+          if (j < src.length) {
+            out.push('%%%geo ' + (m[3] || '').trim());
+            for (var k = i + 1; k < j; k++) out.push(src[k]);
+            out.push('%%%endgeo');
+            i = j + 1; continue;
+          }
+          out.push(line); i++; continue;   // 未闭合：原样保留
+        }
+        var mc = line.match(RE_OPEN_CTR);
+        if (mc) {
+          var j2 = i + 1;
+          while (j2 < src.length && !RE_CLOSE_CTR.test(src[j2])) j2++;
+          if (j2 < src.length) {
+            out.push('%%%geo ' + (mc[1] || '').trim());
+            for (var k2 = i + 1; k2 < j2; k2++) out.push(src[k2]);
+            out.push('%%%endgeo');
+            i = j2 + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        // 普通围栏：整段原样跳过，避免把示例代码里的 ```geometry 也转换掉
+        var mf = line.match(RE_ANY_FENCE);
+        if (mf) {
+          var ch2 = mf[1].charAt(0), n2v = mf[1].length;
+          out.push(line); i++;
+          while (i < src.length) {
+            out.push(src[i]);
+            var cc = src[i].match(RE_CLOSE);
+            if (cc && cc[1].charAt(0) === ch2 && cc[1].length >= n2v) { i++; break; }
+            i++;
+          }
+          continue;
+        }
+        out.push(line); i++;
+      }
+      return out.join('\n');
+    });
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}%%%geo(?:\s|$)/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}%%%endgeo\s*$/.test(lines[j])) j++;
+        return j < lines.length ? j - i + 1 : 0;
+      },
+      render: function (lines, i, n) {
+        var head = lines[i].match(/^\s{0,3}%%%geo\s*(.*)$/);
+        var body = [];
+        // 围栏首行可写多个设置：```geometry scale 60 size 420x300 grid on
+        if (head && head[1]) {
+          var info = head[1].trim();
+          var segs = info.split(/\s+(?=(?:size|scale|view|margin|grid|axes|labels|title|caption)\b)/i);
+          for (var q = 0; q < segs.length; q++) if (segs[q]) body.push(segs[q]);
+        }
+        for (var k = i + 1; k < i + n - 1; k++) body.push(lines[k]);
+        try { return renderFigure(body); }
+        catch (e) {
+          return '<div class="geo-figure"><div class="geo-errbox"><b>⚠ 几何图渲染失败：</b>' +
+                 esc(e && e.message ? e.message : e) + '</div></div>';
+        }
+      }
+    });
+
+    /* ---------------- 工具栏：模板与语法速查 ---------------- */
+    var NL2 = NL;
+    var TPL = {
+      blank: [
+        '# 点：point A = (0, 0)   极坐标：point A = polar(2, 60)',
+        '# 派生点：midpoint / circumcenter / foot / reflect / rotate / intersect / lerp',
+        '# 连线：segment A B | line A B | ray A B | polyline A B C | polygon A B C fill',
+        '# 画圆：circle O r=2 | circle O through A | circle diameter A B',
+        '# 标注：angle A B C | right A B C | tick A B 2 | text (1,1) "说明"',
+        '# 画布：size 480x360 | scale 40 | grid on | axes on | view -3 5 -2 4 | title 图名',
+        'point A = (0, 0)',
+        'point B = (4, 0)',
+        'segment A B'
+      ].join(NL2),
+      triangle: [
+        'point A = (0, 0)',
+        'point B = (4, 0)',
+        'point C = (1.2, 2.8)',
+        'polygon A B C fill',
+        'point O = circumcenter(A, B, C)',
+        'circle O through A',
+        'segment O A dash',
+        'tick A B 1',
+        'tick B C 2',
+        'title 三角形与外接圆'
+      ].join(NL2),
+      righttri: [
+        'point A = (0, 0)',
+        'point B = (4, 0)',
+        'point C = (0, 3)',
+        'polygon A B C fill',
+        'right C A B',
+        'point M = midpoint(B, C)',
+        'segment A M color=#c2410c',
+        'angle B A M label="α"',
+        'title 直角三角形斜边上的中线'
+      ].join(NL2),
+      circle: [
+        'point O = (0, 0)',
+        'point A = (-2, 0)',
+        'point B = (2, 0)',
+        'point C = (0.8, 1.83)',
+        'circle O r=2',
+        'segment A B',
+        'polygon A C B',
+        'right A C B',
+        'text (0, -2.7) "直径所对的圆周角是直角" pos=n',
+        'title 泰勒斯定理'
+      ].join(NL2),
+      coords: [
+        'size 480x340',
+        'grid on',
+        'axes on',
+        'point P = (-2, 1)',
+        'point Q = (1, 3)',
+        'point R = (3, -1)',
+        'polyline P Q R color=#c2410c',
+        'segment P R dash',
+        'line P Q color=#888 dash',
+        'title 坐标系中的折线与直线'
+      ].join(NL2),
+      construct: [
+        'point A = (0, 0)',
+        'point B = (4, 0)',
+        'point C = rotate(B, A, 60)',
+        'polygon A B C fill',
+        'point M = midpoint(A, B)',
+        'point H = foot(C, A, B)',
+        'segment C H dash',
+        'right C H A',
+        'tick A B 1',
+        'tick A C 1',
+        'tick B C 1',
+        'title 等边三角形与高'
+      ].join(NL2)
+    };
+    var LABELS = {
+      blank: '空白骨架', triangle: '三角形 + 外接圆', righttri: '直角三角形 + 直角标记',
+      circle: '圆 + 直径 + 圆周角', coords: '坐标系 + 网格', construct: '等边三角形 + 垂足'
+    };
+    var HELP = [
+      '写法  ```geometry … ```  或  :::geometry … :::；围栏首行可跟多个设置',
+      '设置  size 480x360 | scale 40 | view -3 5 -2 4 | margin 0.6',
+      '      grid on|off|plain | axes on|off | labels on|off | title 图名',
+      '点    point A = (0, 0)   A = (1, sqrt(3)/2)   point P = polar(2, 60)',
+      '      point M = midpoint(A,B) / lerp(A,B,0.5) / circumcenter(A,B,C)',
+      '      point H = foot(P,A,B) / reflect(P,A,B) / rotate(P,O,90)',
+      '      point X = intersect(A,B,C,D) / centroid(A,B,C) / translate(A,1,2)',
+      '线    segment A B | line A B | ray A B | polyline A B C | polygon A B C',
+      '圆    circle O 2 | circle O r=sqrt(2) | circle O through A | circle diameter A B',
+      '标注  arc O A B | angle A B C | right A B C | tick A B 2 | text (1,1) "文字"',
+      '选项  color=#c2410c width=2 dash fill opacity=0.15 label="A₁" pos=ne',
+      '      hide（只定义不画）nolabel nofill arrow r=24 size=14 n=2',
+      '注    坐标里可写 + - * / ^ 与 sqrt/pi/sin/sind/cos/cosd/tan/min/max 等',
+      '      点名可用中文或 Unicode，如 P₁、A\'；# 或 // 开头是注释'
+    ].join(NL2);
+
+    function insertTpl(h, key) {
+      var tpl = TPL[key];
+      if (!tpl) return;
+      h.insertText(NL2 + NL2 + '```geometry' + NL2 + tpl + NL2 + '```' + NL2 + NL2);
+      ctx.app.toast('已插入「' + LABELS[key] + '」');
+    }
+    function pickerHtml() {
+      var keys = ['blank', 'triangle', 'righttri', 'circle', 'coords', 'construct'];
+      var btns = keys.map(function (k) {
+        return '<button class="btn ghost small" data-geo="' + k + '">' + LABELS[k] + '</button>';
+      }).join('');
+      return '<div class="geo-picker">' +
+        '<div class="geo-sec">插入示例</div><div class="geo-grid2">' + btns + '</div>' +
+        '<div class="geo-sec">语法速查</div><pre class="geo-help">' + esc(HELP) + '</pre>' +
+        '</div>';
+    }
+    ctx.ui.addButton({
+      id: 'geometry',
+      icon: '📐',
+      title: '几何作图（模板 / 语法速查）',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '几何作图');
+        body.onclick = function (ev) {
+          if (!ev.target || !ev.target.closest) return;
+          var b = ev.target.closest('[data-geo]');
+          if (!b) return;
+          insertTpl(h, b.getAttribute('data-geo'));
+          var mask = document.getElementById('extCustomMask');
+          if (mask) mask.classList.remove('show');
+        };
+      }
+    });
+    ctx.ui.addCommand({
+      id: 'geometry-blank', key: 'g', ctrl: true, alt: true,
+      onClick: function (h) { insertTpl(h, 'blank'); }
+    });
+  },
+
+  /* 停用 / 移除时清理注入的样式 */
+  dispose: function () {
+    var s = document.getElementById('geo-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});

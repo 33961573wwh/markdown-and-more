@@ -1,0 +1,30 @@
+api.register({
+  name: '容器块语法',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '用 :::tip 标题 … ::: 写提示框、警告框等。',
+  icon: '📦',
+  init: function (ctx) {
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}:::/.test(lines[i])) return 0;
+        // 让位给洛谷容器语法（:::info / :::success / :::warning / :::error / :::align / :::epigraph）
+        if (/^\s{0,3}:::\s*(info|success|warning|error|align|epigraph)\b/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}:::\s*$/.test(lines[j])) j++;
+        if (j >= lines.length) return 0;
+        return j - i + 1;
+      },
+      render: function (lines, i, n) {
+        var open = lines[i].match(/^\s{0,3}:::\s*(\w+)?\s*(.*)$/);
+        var type = (open[1] || 'note').toLowerCase();
+        var title = open[2] || '';
+        var inner = lines.slice(i + 1, i + n - 1);
+        var html = '<div class="admonition admonition-' + type + '">';
+        if (title) html += '<p class="admonition-title">' + ctx.md.inline(title) + '</p>';
+        html += ctx.md.renderBlocks(inner) + '</div>';
+        return html;
+      }
+    });
+  }
+});

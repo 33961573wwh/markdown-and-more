@@ -1,0 +1,22 @@
+api.register({
+  name: 'Emoji 快捷输入',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '把 :smile: 这类短码替换成表情，并加一个插入按钮。',
+  icon: '😀',
+  init: function (ctx) {
+    var map = { smile: '😄', heart: '❤️', check: '✅', warn: '⚠️', fire: '🔥',
+                rocket: '🚀', tada: '🎉', bulb: '💡' };
+    ctx.md.postTransform(function (html) {
+      return html.replace(/(<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)|(:(\w+):)/g,
+        function (m, block, sc, name) {
+          if (block) return block;
+          return map[name] || sc;
+        });
+    });
+    ctx.ui.addButton({
+      id: 'emoji', icon: '😀', title: '插入 Emoji 短码',
+      onClick: function (h) { h.insertText(':smile: '); }
+    });
+  }
+});

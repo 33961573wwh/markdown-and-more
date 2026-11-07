@@ -1,0 +1,382 @@
+/* =========================================================
+ * 代码高亮扩展  (ext-syntax-highlight.mext)
+ * ---------------------------------------------------------
+ * 为 Markdown 围栏代码块提供语法高亮（GitHub 风格配色）：
+ *   - 关键字 / 字符串 / 注释 / 数字 / 函数名 / 类型 分类着色
+ *   - 支持 30+ 语言（按语言切换关键字表与注释风格）
+ *   - 兼容洛谷扩展：```lang line-numbers 显示行号、
+ *     ```lang lines=2-3 区间高亮（本扩展内置，故两者可共存）
+ *   - 明暗主题自适应，导出 HTML 也保留颜色
+ * ---------------------------------------------------------
+ * 导入后即可生效，无需额外操作；与「洛谷新特性」扩展协同：
+ * 洛谷检测到本扩展存在时会自动让出代码块，由本扩展统一着色。
+ * ========================================================= */
+api.register({
+  name: '代码高亮',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '关键字/字符串/注释/数字等语法高亮（类 GitHub 配色），支持 30+ 语言，兼容行号与区间高亮',
+  icon: '🎨',
+
+  init: function (ctx) {
+    var STYLE_ID = 'sh-ext-style';
+
+    var CSS =
+      '.sh-code{counter-reset:shline;font-size:13px;line-height:1.6}' +
+      '.sh-code .sh-line{display:block;white-space:pre}' +
+      '.sh-code.sh-hasnum .sh-line{position:relative;padding-left:3.3em;min-height:1.55em}' +
+      '.sh-code.sh-hasnum .sh-line::before{counter-increment:shline;content:counter(shline);position:absolute;left:0;width:2.4em;text-align:right;color:#9aa0a6;opacity:.75;user-select:none;-webkit-user-select:none}' +
+      '.sh-code .sh-line.sh-hl{background:rgba(56,139,253,.12);border-radius:3px}' +
+      '.sh-com{color:#6a737d;font-style:italic}' +
+      '.sh-str{color:#032f62}' +
+      '.sh-num{color:#005cc5}' +
+      '.sh-kw{color:#d73a49}' +
+      '.sh-bool{color:#005cc5}' +
+      '.sh-fn{color:#6f42c1}' +
+      '.sh-type{color:#22863a}' +
+      '.sh-pre{color:#d73a49}' +
+      'html[data-theme="dark"] .sh-code.sh-hasnum .sh-line::before{color:#6e7681}' +
+      'html[data-theme="dark"] .sh-com{color:#8b949e}' +
+      'html[data-theme="dark"] .sh-str{color:#a5d6ff}' +
+      'html[data-theme="dark"] .sh-num{color:#79c0ff}' +
+      'html[data-theme="dark"] .sh-kw{color:#ff7b72}' +
+      'html[data-theme="dark"] .sh-bool{color:#79c0ff}' +
+      'html[data-theme="dark"] .sh-fn{color:#d2a8ff}' +
+      'html[data-theme="dark"] .sh-type{color:#7ee787}' +
+      'html[data-theme="dark"] .sh-code .sh-line.sh-hl{background:rgba(56,139,253,.18)}';
+
+    function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID;
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    ensureStyle();
+
+    // 声明「代码块由本扩展接管」，让洛谷扩展（若已加载）自动让出
+    window.__MOJIAN_SYNTAX_HL__ = true;
+
+    /* ---------------- 语言与关键字表 ---------------- */
+    var LANG_GROUP = {
+      js: 'js', javascript: 'js', jsx: 'js', ts: 'js', typescript: 'js', tsx: 'js',
+      mjs: 'js', cjs: 'js', node: 'js', coffee: 'js',
+      c: 'cpp', h: 'cpp', hpp: 'cpp', cc: 'cpp', cxx: 'cpp', cpp: 'cpp', 'c++': 'cpp',
+      cs: 'csharp', 'c#': 'csharp', csharp: 'csharp',
+      java: 'cpp', scala: 'cpp', kt: 'cpp', kotlin: 'cpp', swift: 'cpp', dart: 'cpp',
+      objc: 'cpp', m: 'cpp',
+      python: 'python', py: 'python', python3: 'python', ipython: 'python',
+      go: 'go', golang: 'go', rs: 'rust', rust: 'rust', rl: 'rust',
+      sh: 'shell', bash: 'shell', shell: 'shell', zsh: 'shell', fish: 'shell',
+      sql: 'sql', mysql: 'sql', postgres: 'sql', postgresql: 'sql', sqlite: 'sql',
+      plsql: 'sql', tsql: 'sql', mariadb: 'sql',
+      rb: 'ruby', ruby: 'ruby',
+      php: 'php', php3: 'php', php4: 'php', php5: 'php', php7: 'php', phtml: 'php',
+      html: 'html', xml: 'html', svg: 'html', vue: 'html', htm: 'html',
+      css: 'css', scss: 'css', less: 'css', sass: 'css',
+      yml: 'yaml', yaml: 'yaml', toml: 'yaml', ini: 'yaml', conf: 'yaml', cfg: 'yaml', env: 'yaml',
+      json: 'json', jsonc: 'json', json5: 'json',
+      lua: 'lua', hs: 'haskell', haskell: 'haskell', ml: 'ml', r: 'r', pl: 'perl',
+      perl: 'perl', matlab: 'matlab', octave: 'matlab', elixir: 'elixir', ex: 'elixir',
+      dockerfile: 'shell', make: 'shell', cmake: 'shell'
+    };
+
+    var LINE_COMMENTS = {
+      js: ['//'], cpp: ['//'], csharp: ['//'], go: ['//'], rust: ['//'], shell: ['#'],
+      python: ['#'], sql: ['--'], ruby: ['#'], php: ['//', '#'], html: ['//'], css: ['//'],
+      yaml: ['#'], json: ['//'], lua: ['--'], haskell: ['--'], ml: ['#'], r: ['#'],
+      perl: ['#'], matlab: ['%'], elixir: ['#'], common: ['//']
+    };
+
+    var NO_BLOCK = { python: 1, ruby: 1, shell: 1, sql: 1, yaml: 1, lua: 1, matlab: 1, json: 1, perl: 1, r: 1, haskell: 1, elixir: 1 };
+    var HAS_PRE = { cpp: 1, csharp: 1, java: 1, go: 1, rust: 1, swift: 1, kotlin: 1, scala: 1, dart: 1 };
+
+    var BOOL_SET = new Set([
+      'true', 'false', 'null', 'nil', 'undefined', 'NaN', 'Infinity',
+      'None', 'True', 'False', 'NULL', 'this', 'self', 'super'
+    ]);
+
+    var TYPE_SET = new Set([
+      'int', 'long', 'short', 'byte', 'char', 'float', 'double', 'bool', 'void',
+      'string', 'String', 'number', 'boolean', 'object', 'any', 'unknown', 'never',
+      'Array', 'Object', 'List', 'Map', 'Set', 'Vector', 'Dict', 'Tuple', 'Option',
+      'Result', 'Function', 'Promise', 'Symbol', 'BigInt', 'Buffer', 'Error'
+    ]);
+
+    var COMMON_KW = [
+      'if', 'else', 'elif', 'for', 'while', 'do', 'return', 'break', 'continue',
+      'switch', 'case', 'default', 'new', 'delete', 'typeof', 'instanceof', 'in', 'of',
+      'void', 'try', 'catch', 'finally', 'throw', 'import', 'export', 'from', 'as',
+      'class', 'extends', 'implements', 'interface', 'enum', 'const', 'let', 'var',
+      'function', 'public', 'private', 'protected', 'static', 'final', 'abstract',
+      'async', 'await', 'yield', 'get', 'set', 'namespace', 'using', 'package'
+    ];
+
+    var KEYWORDS = {
+      js: COMMON_KW.concat([
+        'extends', 'super', 'this', 'typeof', 'instanceof', 'undefined', 'null',
+        'declare', 'readonly', 'infer', 'keyof', 'type', 'implements', 'interface',
+        'never', 'any', 'unknown', 'string', 'number', 'boolean', 'object', 'symbol',
+        'bigint', 'module', 'require'
+      ]),
+      cpp: COMMON_KW.concat([
+        'struct', 'int', 'long', 'short', 'float', 'double', 'char', 'bool', 'unsigned',
+        'signed', 'template', 'typename', 'typedef', 'namespace', 'sizeof', 'nullptr',
+        'auto', 'virtual', 'override', 'union', 'explicit', 'inline', 'operator',
+        'extern',         'volatile', 'mutable', 'register', 'constexpr', 'noexcept', 'friend',
+        'public', 'private', 'protected'
+      ]),
+      python: COMMON_KW.concat([
+        'def', 'elif', 'pass', 'import', 'from', 'with', 'except', 'raise', 'lambda',
+        'global', 'nonlocal', 'assert', 'del', 'is', 'not', 'and', 'or', 'print',
+        'self'
+      ]),
+      go: COMMON_KW.concat([
+        'func', 'package', 'range', 'defer', 'chan', 'map', 'struct', 'interface',
+        'type', 'select', 'fallthrough', 'nil'
+      ]),
+      rust: COMMON_KW.concat([
+        'fn', 'mut', 'static', 'struct', 'enum', 'trait', 'impl', 'pub', 'mod', 'use',
+        'match', 'loop', 'move', 'ref', 'Self', 'where', 'dyn', 'unsafe', 'crate',
+        'true', 'false'
+      ]),
+      shell: COMMON_KW.concat([
+        'then', 'fi', 'elif', 'done', 'case', 'esac', 'function', 'local', 'export',
+        'source', 'echo', 'read', 'cd', 'exit'
+      ]),
+      sql: [
+        'SELECT', 'FROM', 'WHERE', 'INSERT', 'INTO', 'VALUES', 'UPDATE', 'DELETE',
+        'CREATE', 'TABLE', 'ALTER', 'DROP', 'INDEX', 'VIEW', 'AND', 'OR', 'NOT', 'NULL',
+        'AS', 'JOIN', 'ON', 'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'UNION', 'ALL',
+        'GROUP', 'BY', 'ORDER', 'HAVING', 'LIMIT', 'OFFSET', 'DISTINCT', 'CASE', 'WHEN',
+        'THEN', 'ELSE', 'END', 'SET', 'BEGIN', 'COMMIT', 'ROLLBACK', 'PRIMARY', 'FOREIGN',
+        'KEY', 'REFERENCES', 'CONSTRAINT', 'DEFAULT', 'ASC', 'DESC', 'EXISTS', 'BETWEEN',
+        'LIKE', 'IS', 'IN'
+      ],
+      ruby: COMMON_KW.concat([
+        'end', 'elsif', 'unless', 'then', 'module', 'require', 'begin', 'rescue',
+        'ensure', 'attr_accessor', 'attr_reader', 'attr_writer', 'and', 'or', 'not',
+        'nil', 'self', 'when', 'next', 'redo', 'retry', 'proc', 'lambda', 'do'
+      ]),
+      php: COMMON_KW.concat([
+        'echo', 'print', 'global', 'require', 'include', 'require_once', 'include_once',
+        'clone', 'instanceof', 'trait', 'use', 'namespace', 'true', 'false', 'null'
+      ]),
+      haskell: ['let', 'in', 'where', 'data', 'type', 'class', 'instance', 'module',
+        'import', 'do', 'case', 'of', 'if', 'then', 'else', 'newtype', 'deriving'],
+      perl: ['my', 'our', 'use', 'sub', 'package', 'if', 'else', 'elsif', 'while',
+        'foreach', 'for', 'unless', 'next', 'last', 'return', 'die', 'warn'],
+      lua: ['local', 'function', 'end', 'if', 'then', 'elseif', 'else', 'for', 'while',
+        'do', 'repeat', 'until', 'return', 'break', 'and', 'or', 'not', 'nil', 'true',
+        'false', 'in', 'pairs', 'ipairs'],
+      matlab: ['function', 'end', 'if', 'elseif', 'else', 'for', 'while', 'switch',
+        'case', 'otherwise', 'return', 'break', 'continue', 'global', 'persistent'],
+      elixir: ['def', 'defp', 'defmodule', 'do', 'end', 'if', 'else', 'case', 'when',
+        'fn', 'let', 'in', 'for', 'while', 'use', 'require', 'import', 'alias', 'nil',
+        'true', 'false']
+    };
+
+    var cfgCache = {};
+    function langCfg(lang) {
+      if (cfgCache[lang]) return cfgCache[lang];
+      var g = LANG_GROUP[(lang || '').toLowerCase()] || 'common';
+      var kw = new Set((KEYWORDS[g] || []).concat(COMMON_KW));
+      var cfg = {
+        group: g,
+        lineCom: LINE_COMMENTS[g] || LINE_COMMENTS.common,
+        block: NO_BLOCK[g] ? null : ['/*', '*/'],
+        blockHtml: g === 'html',
+        pre: !!HAS_PRE[g],
+        kwSet: kw,
+        ci: g === 'sql'
+      };
+      cfgCache[lang] = cfg;
+      return cfg;
+    }
+
+    /* ---------------- 着色核心 ---------------- */
+    function escAll(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // 扫描一行；state 跨行延续（块注释 / 多行字符串）
+    function highlightLine(line, cfg, st) {
+      var out = '';
+      var L = line.length;
+      var i = 0;
+
+      // 1) 延续块注释
+      if (st.block) {
+        var be = line.indexOf('*/');
+        if (be < 0) { out += '<span class="sh-com">' + escAll(line) + '</span>'; return out; }
+        out += '<span class="sh-com">' + escAll(line.slice(0, be + 2)) + '</span>';
+        line = line.slice(be + 2); i = 0; L = line.length; st.block = false;
+      }
+
+      // 2) 延续多行字符串
+      if (st.str) {
+        var q = st.tri ? (st.strCh + st.strCh + st.strCh) : st.strCh;
+        var se = line.indexOf(q);
+        if (se < 0) { out += '<span class="sh-str">' + escAll(line) + '</span>'; return out; }
+        out += '<span class="sh-str">' + escAll(line.slice(0, se + q.length)) + '</span>';
+        line = line.slice(se + q.length); i = 0; L = line.length; st.str = false; st.tri = false;
+      }
+
+      // 3) 主扫描
+      while (i < L) {
+        var c = line.charAt(i);
+
+        // 空白
+        if (c === ' ' || c === '\t') {
+          var ws = i; while (ws < L && (line.charAt(ws) === ' ' || line.charAt(ws) === '\t')) ws++;
+          out += line.slice(i, ws); i = ws; continue;
+        }
+
+        // 块注释（C 系）
+        if (cfg.block && line.substr(i, 2) === '/*') {
+          var e = line.indexOf('*/', i + 2);
+          if (e < 0) { st.block = true; out += '<span class="sh-com">' + escAll(line.slice(i)) + '</span>'; i = L; break; }
+          out += '<span class="sh-com">' + escAll(line.slice(i, e + 2)) + '</span>'; i = e + 2; continue;
+        }
+        // HTML 注释
+        if (cfg.blockHtml && line.substr(i, 4) === '<!--') {
+          var eh = line.indexOf('-->', i + 4);
+          if (eh < 0) { st.block = true; out += '<span class="sh-com">' + escAll(line.slice(i)) + '</span>'; i = L; break; }
+          out += '<span class="sh-com">' + escAll(line.slice(i, eh + 3)) + '</span>'; i = eh + 3; continue;
+        }
+
+        // 行注释
+        var matched = false;
+        for (var ci = 0; ci < cfg.lineCom.length; ci++) {
+          var cmt = cfg.lineCom[ci];
+          if (line.substr(i, cmt.length) === cmt) {
+            out += '<span class="sh-com">' + escAll(line.slice(i)) + '</span>'; i = L; matched = true; break;
+          }
+        }
+        if (matched) break;
+
+        // 字符串（含三引号多行）
+        if (c === '"' || c === "'" || c === '`') {
+          if ((c === '"' || c === "'") && line.substr(i, 3) === c + c + c) {
+            var tri = c + c + c;
+            var et = line.indexOf(tri, i + 3);
+            if (et < 0) { st.str = true; st.strCh = c; st.tri = true; out += '<span class="sh-str">' + escAll(line.slice(i)) + '</span>'; i = L; break; }
+            out += '<span class="sh-str">' + escAll(line.slice(i, et + 3)) + '</span>'; i = et + 3; continue;
+          }
+          var j = i + 1;
+          while (j < L) {
+            if (line.charAt(j) === '\\') { j += 2; continue; }
+            if (line.charAt(j) === c) { j++; break; }
+            j++;
+          }
+          out += '<span class="sh-str">' + escAll(line.slice(i, j)) + '</span>'; i = j; continue;
+        }
+
+        // 数字
+        if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(line.charAt(i + 1)))) {
+          var d = i;
+          if (line.charAt(d) === '0' && (line.charAt(d + 1) === 'x' || line.charAt(d + 1) === 'X')) {
+            d += 2; while (d < L && /[0-9a-fA-F]/.test(line.charAt(d))) d++;
+          } else if (line.charAt(d) === '0' && (line.charAt(d + 1) === 'b' || line.charAt(d + 1) === 'B')) {
+            d += 2; while (d < L && /[01]/.test(line.charAt(d))) d++;
+          } else if (line.charAt(d) === '0' && (line.charAt(d + 1) === 'o' || line.charAt(d + 1) === 'O')) {
+            d += 2; while (d < L && /[0-7]/.test(line.charAt(d))) d++;
+          } else {
+            while (d < L && /[0-9.]/.test(line.charAt(d))) d++;
+            if (line.charAt(d) === 'e' || line.charAt(d) === 'E') {
+              d++; if (line.charAt(d) === '+' || line.charAt(d) === '-') d++;
+              while (d < L && /[0-9]/.test(line.charAt(d))) d++;
+            }
+          }
+          while (d < L && /[uUlLfFdDhH]/.test(line.charAt(d))) d++;
+          out += '<span class="sh-num">' + escAll(line.slice(i, d)) + '</span>'; i = d; continue;
+        }
+
+        // 标识符
+        if (/[A-Za-z_$]/.test(c)) {
+          var di = i + 1;
+          while (di < L && /[A-Za-z0-9_$]/.test(line.charAt(di))) di++;
+          var word = line.slice(i, di);
+          var after = /^\s*\(/.test(line.slice(di));
+          var upper = word.toUpperCase();
+          if (cfg.kwSet.has(word) || (cfg.ci && cfg.kwSet.has(upper))) {
+            out += '<span class="sh-kw">' + escAll(word) + '</span>';
+          } else if (BOOL_SET.has(word) || (cfg.ci && BOOL_SET.has(upper))) {
+            out += '<span class="sh-bool">' + escAll(word) + '</span>';
+          } else if (after) {
+            out += '<span class="sh-fn">' + escAll(word) + '</span>';
+          } else if (TYPE_SET.has(word) || (cfg.ci && TYPE_SET.has(upper)) ||
+                     (/^[A-Z]/.test(word) && /[a-z]/.test(word.slice(1)))) {
+            out += '<span class="sh-type">' + escAll(word) + '</span>';
+          } else {
+            out += escAll(word);
+          }
+          i = di; continue;
+        }
+
+        // C 系预处理指令 #word
+        if (c === '#' && cfg.pre) {
+          var pj = i + 1;
+          while (pj < L && /[A-Za-z_]/.test(line.charAt(pj))) pj++;
+          if (pj > i + 1) { out += '<span class="sh-pre">' + escAll(line.slice(i, pj)) + '</span>'; i = pj; continue; }
+        }
+
+        // 其他（运算符 / 标点）
+        out += escAll(c); i++; continue;
+      }
+      return out;
+    }
+
+    /* ---------------- 接管代码块 ---------------- */
+    var RE_FENCE_INFO = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`~]*)\s*(.*)$/;
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        var m = lines[i].match(RE_FENCE_INFO);
+        if (!m) return 0;
+        var ch = m[1].charAt(0), len = m[1].length;
+        for (var j = i + 1; j < lines.length; j++) {
+          var cm = lines[j].match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+          if (cm && cm[1].charAt(0) === ch && cm[1].length >= len) return j - i + 1;
+        }
+        return 0;
+      },
+      render: function (lines, i, n) {
+        var m = lines[i].match(RE_FENCE_INFO);
+        var lang = (m && m[2]) || '';
+        var info = (m && m[3]) || '';
+        var showNum = /line-numbers/.test(info);
+        var hl = /lines\s*=\s*(\d+)\s*(?:-\s*(\d+))?/.exec(info);
+        var from = hl ? parseInt(hl[1], 10) : 0;
+        var to = hl ? parseInt(hl[2] || hl[1], 10) : 0;
+
+        var code = lines.slice(i + 1, i + n - 1).join('\n');
+        if (code.charAt(code.length - 1) === '\n') code = code.slice(0, -1);
+        var codeLines = code.length ? code.split('\n') : [''];
+
+        var cfg = langCfg(lang);
+        var st = {};
+        var out = '<pre class="sh-code' + (showNum ? ' sh-hasnum' : '') + '"><code' +
+          (lang ? ' class="language-' + escAll(lang) + '"' : '') + '>';
+        for (var k = 0; k < codeLines.length; k++) {
+          var no = k + 1;
+          var isHl = hl && no >= from && no <= to;
+          out += '<span class="sh-line' + (isHl ? ' sh-hl' : '') + '">' +
+            (highlightLine(codeLines[k], cfg, st) || '') + '</span>';
+        }
+        return out + '</code></pre>';
+      }
+    });
+  },
+
+  /* 扩展被停用 / 移除时清理 */
+  dispose: function () {
+    var s = document.getElementById('sh-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    try { delete window.__MOJIAN_SYNTAX_HL__; } catch (e) { window.__MOJIAN_SYNTAX_HL__ = false; }
+  }
+});

@@ -1,0 +1,403 @@
+/* =========================================================
+ * 洛谷新特性扩展  (ext-luogu.mext)
+ * ---------------------------------------------------------
+ * 支持洛谷 2025 版 Markdown 的全部扩展语法：
+ *   折叠框   :::info[标题]{open} … :::   （info/success/warning/error，可嵌套）
+ *   居中     :::align{center} … :::
+ *   居右     :::align{right} … :::
+ *   引言     :::epigraph[——otto] … :::
+ *   Tuack 表 ::cute-table{tuack}
+ *   代码行号 ```cpp line-numbers
+ *   代码高亮 ```cpp lines=5-6
+ *   表格合并 ^ 向上合并   < 向左合并
+ * ---------------------------------------------------------
+ * 导入后工具栏会出现 🌱 按钮，可一键插入上述模板。
+ * ========================================================= */
+api.register({
+  name: '洛谷新特性',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '折叠框 / 居中 / 居右 / 引言 / Tuack 表格 / 代码行号与高亮 / 表格合并单元格',
+  icon: '🌱',
+
+  init: function (ctx) {
+
+    /* ---------------- 样式 ---------------- */
+    var STYLE_ID = 'lg-ext-style';
+    var CSS = [
+      '.preview .lg-fold{margin:1.15em 0;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);overflow:hidden}',
+      '.preview .lg-fold>summary{cursor:pointer;padding:.6em .95em;font-weight:650;color:var(--text);display:flex;align-items:center;gap:.5em;list-style:none;user-select:none}',
+      '.preview .lg-fold>summary::-webkit-details-marker{display:none}',
+      '.preview .lg-fold>summary::before{content:"\\25B8";font-size:.85em;color:var(--muted);transition:transform .16s ease;display:inline-block}',
+      '.preview .lg-fold[open]>summary::before{transform:rotate(90deg)}',
+      '.preview .lg-fold-body{padding:.1em .95em .9em;border-top:1px solid var(--line)}',
+      '.preview .lg-fold-body>:first-child{margin-top:.65em}',
+      '.preview .lg-fold-body>:last-child{margin-bottom:0}',
+      '.preview .lg-info{box-shadow:inset 3px 0 0 #3b82f6}',
+      '.preview .lg-success{box-shadow:inset 3px 0 0 #22c55e}',
+      '.preview .lg-warning{box-shadow:inset 3px 0 0 #f59e0b}',
+      '.preview .lg-error{box-shadow:inset 3px 0 0 #ef4444}',
+      '.preview .lg-info>summary{color:#3b82f6}',
+      '.preview .lg-success>summary{color:#22c55e}',
+      '.preview .lg-warning>summary{color:#d97706}',
+      '.preview .lg-error>summary{color:#ef4444}',
+      '.preview .lg-align-center{text-align:center}',
+      '.preview .lg-align-right{text-align:right}',
+      '.preview .lg-epigraph{margin:1.15em 0;padding:.15em 1em;border-left:3px solid var(--line-strong);color:var(--text-soft);font-style:italic}',
+      '.preview .lg-epigraph>:last-child{margin-bottom:0}',
+      '.preview .lg-epi-author{display:block;margin-top:.45em;font-style:normal;color:var(--muted);font-size:.92em;text-align:right}',
+      '.preview .lg-cute{margin:1.15em 0;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--panel)}',
+      '.preview .lg-cute .lg-table{margin:0;border-collapse:collapse;width:100%;display:table}',
+      '.preview .lg-cute .lg-table th,.preview .lg-cute .lg-table td{border:1px solid var(--line);padding:.5em .8em}',
+      '.preview .lg-cute .lg-table thead th{text-align:center;background:color-mix(in srgb,var(--accent) 14%,var(--panel-2));color:var(--text)}',
+      '.preview .lg-table td[rowspan],.preview .lg-table td[colspan]{vertical-align:middle}',
+      '.preview .lg-code{counter-reset:lgline}',
+      '.preview .lg-code .lg-line{display:block;position:relative;padding-left:3.2em;min-height:1.55em}',
+      '.preview .lg-code.lg-hasinum .lg-line::before{counter-increment:lgline;content:counter(lgline);position:absolute;left:0;width:2.35em;text-align:right;color:var(--muted);opacity:.72;user-select:none;-webkit-user-select:none}',
+      '.preview .lg-code .lg-line.lg-hl{background:color-mix(in srgb,var(--accent) 16%,transparent)}',
+      '.lg-picker{display:flex;flex-direction:column;gap:.85em}',
+      '.lg-picker .lg-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}',
+      '.lg-picker .lg-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(148px,1fr));gap:.4rem}',
+      '.lg-picker .lg-grid button{justify-content:flex-start;text-align:left}',
+      '.lg-picker .lg-note{font-size:12px;color:var(--muted);line-height:1.7}',
+      '.lg-picker .lg-note code{font-size:11px}'
+    ].join('\n');
+
+    function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID;
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    ensureStyle();
+
+    /* ---------------- 基础工具 ---------------- */
+    function esc(s) {
+      return String(s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    // 按 | 切分表格行，支持转义竖线 \|
+    function splitCells(line) {
+      var s = String(line).trim();
+      if (s.charAt(0) === '|') s = s.slice(1);
+      if (s.charAt(s.length - 1) === '|' && s.charAt(s.length - 2) !== '\\') s = s.slice(0, -1);
+      var cells = [], cur = '';
+      for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        if (ch === '\\' && s.charAt(i + 1) === '|') { cur += '|'; i++; continue; }
+        if (ch === '|') { cells.push(cur.trim()); cur = ''; continue; }
+        cur += ch;
+      }
+      cells.push(cur.trim());
+      return cells;
+    }
+
+    function isSepRow(line) {
+      return /^\s*\|?\s*:?-{1,}:?\s*(\|\s*:?-{1,}:?\s*)*\|?\s*$/.test(line) && line.indexOf('|') >= 0;
+    }
+
+    function alignOf(cell) {
+      var c = String(cell).trim();
+      var l = c.charAt(0) === ':', r = c.charAt(c.length - 1) === ':';
+      return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
+    }
+
+    // 判断第 i 行是否位于围栏代码块内部（避免把代码里的 ::: 当成容器）
+    function insideFence(lines, i) {
+      var open = null;
+      for (var k = 0; k < i; k++) {
+        var line = lines[k];
+        var close = line.match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+        if (close && open && close[1].charAt(0) === open.ch && close[1].length >= open.len) {
+          open = null;
+          continue;
+        }
+        if (!open) {
+          var om = line.match(/^\s{0,3}(`{3,}|~{3,})\s*\S/);
+          if (om) open = { ch: om[1].charAt(0), len: om[1].length };
+        }
+      }
+      return open !== null;
+    }
+
+    /* ---------------- 带合并单元格的表格 ---------------- */
+    function renderTable(head, aligns, body) {
+      var cols = head.length;
+      body.forEach(function (r) { if (r.length > cols) cols = r.length; });
+      var heads = head.slice();
+      while (heads.length < cols) heads.push('');
+
+      var out = '<table class="lg-table"><thead><tr>';
+      heads.forEach(function (c, k) {
+        out += '<th' + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : '') + '>' +
+          ctx.md.inline(c) + '</th>';
+      });
+      out += '</tr></thead><tbody>';
+
+      var active = [];   // 每列当前生效的合并块（供 ^ 向上合并使用）
+      var rowsOut = [];
+
+      // 第一遍：计算所有单元格的合并关系（rowspan / colspan 必须先算完再输出 HTML）
+      body.forEach(function (row, r) {
+        var owner = [];  // 本行每一列所属的合并块（供 < 向左合并使用）
+        var items = [];
+        for (var c = 0; c < cols; c++) {
+          if (owner[c]) continue;                       // 已被本行的合并块占据
+          var act = active[c];
+          if (act && act.endRow >= r) { owner[c] = act; continue; }   // 被上方 rowspan 覆盖
+          var raw = row[c] == null ? '' : String(row[c]).trim();
+
+          if (raw === '^' && act && act.startRow < r) {  // 向上合并
+            act.rowspan++; act.endRow = r; owner[c] = act; continue;
+          }
+          if (raw === '<' && c > 0 && owner[c - 1]) {     // 向左合并
+            var left = owner[c - 1];
+            left.colspan++; left.endCol = c; owner[c] = left; continue;
+          }
+          var span = { startRow: r, endRow: r, startCol: c, endCol: c, rowspan: 1, colspan: 1 };
+          items.push({ span: span, content: raw, col: c });
+          active[c] = span;
+          owner[c] = span;
+        }
+        rowsOut.push(items);
+      });
+
+      // 第二遍：按算好的合并关系输出
+      rowsOut.forEach(function (items) {
+        out += '<tr>';
+        items.forEach(function (it) {
+          var s = it.span, attr = '';
+          if (s.rowspan > 1) attr += ' rowspan="' + s.rowspan + '"';
+          if (s.colspan > 1) attr += ' colspan="' + s.colspan + '"';
+          if (aligns[it.col]) attr += ' style="text-align:' + aligns[it.col] + '"';
+          out += '<td' + attr + '>' + ctx.md.inline(it.content) + '</td>';
+        });
+        out += '</tr>';
+      });
+      return out + '</tbody></table>';
+    }
+
+    // 取出一张表：返回 {head, aligns, body, end}（end 为表格结束后的行号）
+    function readTable(lines, start) {
+      if (start >= lines.length) return null;
+      if (lines[start].indexOf('|') < 0) return null;
+      if (start + 1 >= lines.length || !isSepRow(lines[start + 1])) return null;
+      var head = splitCells(lines[start]);
+      var aligns = splitCells(lines[start + 1]).map(alignOf);
+      var body = [];
+      var k = start + 2;
+      while (k < lines.length && lines[k].trim() !== '' && lines[k].indexOf('|') >= 0) {
+        body.push(splitCells(lines[k]));
+        k++;
+      }
+      return { head: head, aligns: aligns, body: body, end: k };
+    }
+
+    /* ---------------- 规则 1：::: 容器 ---------------- */
+    var RE_CONTAINER = /^\s{0,3}(:{3,})\s*(info|success|warning|error|align|epigraph)\s*(?:\[([^\]]*)\])?\s*(?:\{([^}]*)\})?\s*$/;
+    var DEFAULTS = { info: '提示', success: '成功', warning: '注意', error: '错误' };
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        var m = lines[i].match(RE_CONTAINER);
+        if (!m) return 0;
+        if (insideFence(lines, i)) return 0;
+        var n = m[1].length;
+        for (var j = i + 1; j < lines.length; j++) {
+          var cm = lines[j].match(/^\s{0,3}(:{3,})\s*$/);
+          if (cm && cm[1].length === n) return j - i + 1;   // 同级冒号数即为闭合标记
+        }
+        return 0;
+      },
+      render: function (lines, i, n) {
+        var m = lines[i].match(RE_CONTAINER);
+        var type = m[2];
+        var title = m[3] == null ? '' : m[3];
+        var param = (m[4] || '').trim();
+        var body = ctx.md.renderBlocks(lines.slice(i + 1, i + n - 1));
+
+        if (type === 'align') {
+          var dir = param === 'right' ? 'right' : 'center';
+          return '<div class="lg-align lg-align-' + dir + '">' + body + '</div>';
+        }
+        if (type === 'epigraph') {
+          return '<blockquote class="lg-epigraph">' + body +
+            (title ? '<footer class="lg-epi-author">' + ctx.md.inline(title) + '</footer>' : '') +
+            '</blockquote>';
+        }
+        var open = /(^|\s)open(\s|$)/.test(param);
+        var label = title || DEFAULTS[type] || '详情';
+        return '<details class="lg-fold lg-' + type + '"' + (open ? ' open' : '') + '>' +
+          '<summary>' + ctx.md.inline(label) + '</summary>' +
+          '<div class="lg-fold-body">' + body + '</div></details>';
+      }
+    });
+
+    /* ---------------- 规则 2：::cute-table{tuack} ---------------- */
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}::cute-table\s*\{[^}]*\}\s*$/.test(lines[i])) return 0;
+        if (insideFence(lines, i)) return 0;
+        var j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') j++;   // 允许空行
+        var t = readTable(lines, j);
+        return t ? (t.end - i) : 0;
+      },
+      render: function (lines, i, n) {
+        var variant = (lines[i].match(/cute-table\s*\{([^}]*)\}/) || [null, 'tuack'])[1].trim() || 'tuack';
+        var j = i + 1;
+        while (j < lines.length && lines[j].trim() === '') j++;
+        var t = readTable(lines, j);
+        if (!t) return '';
+        return '<div class="lg-cute lg-cute-' + esc(variant) + '">' +
+          renderTable(t.head, t.aligns, t.body) + '</div>';
+      }
+    });
+
+    /* ---------------- 规则 3：带合并单元格的表格 ---------------- */
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        var t = readTable(lines, i);
+        if (!t) return 0;
+        if (insideFence(lines, i)) return 0;
+        for (var r = 0; r < t.body.length; r++) {
+          for (var c = 0; c < t.body[r].length; c++) {
+            var cell = t.body[r][c];
+            if (cell === '^' || cell === '<') return t.end - i;
+          }
+        }
+        return 0;
+      },
+      render: function (lines, i, n) {
+        var t = readTable(lines, i);
+        if (!t) return '';
+        return renderTable(t.head, t.aligns, t.body);
+      }
+    });
+
+    /* ---------------- 规则 4：代码行号 / 行范围高亮 ---------------- */
+    var RE_FENCE_INFO = /^\s{0,3}(`{3,}|~{3,})\s*([^\s`~]*)\s*(.*)$/;
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        var m = lines[i].match(RE_FENCE_INFO);
+        if (!m) return 0;
+        // 若已安装「代码高亮」扩展，则让出代码块由其统一着色（顺序无关）
+        if (window.__MOJIAN_SYNTAX_HL__) return 0;
+        if (!/line-numbers|lines\s*=/.test(m[3] || '')) return 0;
+        var ch = m[1].charAt(0), len = m[1].length;
+        for (var j = i + 1; j < lines.length; j++) {
+          var cm = lines[j].match(/^\s{0,3}(`{3,}|~{3,})\s*$/);
+          if (cm && cm[1].charAt(0) === ch && cm[1].length >= len) return j - i + 1;
+        }
+        return 0;
+      },
+      render: function (lines, i, n) {
+        var m = lines[i].match(RE_FENCE_INFO);
+        var lang = m[2] || '';
+        var info = m[3] || '';
+        var showNum = /line-numbers/.test(info);
+        var hl = /lines\s*=\s*(\d+)\s*(?:-\s*(\d+))?/.exec(info);
+        var from = hl ? parseInt(hl[1], 10) : 0;
+        var to = hl ? parseInt(hl[2] || hl[1], 10) : 0;
+        var arr = lines.slice(i + 1, i + n - 1).join('\n').split('\n');
+        var out = '<pre class="lg-code' + (showNum ? ' lg-hasinum' : '') + '"><code' +
+          (lang ? ' class="language-' + esc(lang) + '"' : '') + '>';
+        for (var k = 0; k < arr.length; k++) {
+          var no = k + 1;
+          var isHl = hl && no >= from && no <= to;
+          out += '<span class="lg-line' + (isHl ? ' lg-hl' : '') + '">' +
+            (arr[k] ? esc(arr[k]) : '') + '</span>';
+        }
+        return out + '</code></pre>';
+      }
+    });
+
+    /* ---------------- 模板与插入面板 ---------------- */
+    var C = '\u0001';   // 光标位置标记
+
+    var TPL = {
+      'fold-info':    ':::info[提示]\n' + C + '在这里写内容\n:::',
+      'fold-success': ':::success[成功]\n' + C + '在这里写内容\n:::',
+      'fold-warning': ':::warning[注意]\n' + C + '在这里写内容\n:::',
+      'fold-error':   ':::error[警告]\n' + C + '在这里写内容\n:::',
+      'fold-open':    ':::info[默认展开]{open}\n' + C + '在这里写内容\n:::',
+      'align-center': ':::align{center}\n' + C + '居中的内容\n:::',
+      'align-right':  ':::align{right}\n' + C + '居右的内容\n:::',
+      'epigraph':     ':::epigraph[——otto]\n' + C + '引言内容\n:::',
+      'cute-table':   '::cute-table{tuack}\n\n| 列 1 | 列 2 | 列 3 |\n| :-: | :-: | :-: |\n| 内容 | 内容 | 内容 |\n',
+      'code-lineno':  '```cpp line-numbers\n' + C + '// 代码\n```',
+      'code-range':   '```cpp line-numbers lines=2-3\n' + C + '// 代码\n```',
+      'table-merge':  '| 标题 1 | 标题 2 | 标题 3 |\n| :-: | :-: | :-: |\n| 1 | 跨行合并 | 无 |\n| 2 | ^ | 无 |\n| 跨列合并 | < | 无 |\n',
+      'solution':     '## 题目链接\n\n[P1000 超级玛丽游戏](https://www.luogu.com.cn/problem/P1000)\n\n## 思路\n\n' + C + '\n\n## 代码\n\n```cpp\n\n```\n'
+    };
+
+    var LABELS = {
+      'fold-info':    '提示框 info',
+      'fold-success': '成功框 success',
+      'fold-warning': '警告框 warning',
+      'fold-error':   '错误框 error',
+      'fold-open':    '默认展开 {open}',
+      'align-center': '居中 align',
+      'align-right':  '居右 align',
+      'epigraph':     '引言 epigraph',
+      'cute-table':   'Tuack 风格表格',
+      'table-merge':  '合并单元格表格',
+      'code-lineno':  '代码行号',
+      'code-range':   '代码高亮区间',
+      'solution':     '题解骨架'
+    };
+
+    function pickerHtml() {
+      function sec(title, keys) {
+        var btns = keys.map(function (k) {
+          return '<button class="btn ghost small" data-tpl="' + k + '">' + LABELS[k] + '</button>';
+        }).join('');
+        return '<div class="lg-sec">' + title + '</div><div class="lg-grid">' + btns + '</div>';
+      }
+      return '<div class="lg-picker">' +
+        sec('折叠框', ['fold-info', 'fold-success', 'fold-warning', 'fold-error', 'fold-open']) +
+        sec('排版', ['align-center', 'align-right', 'epigraph']) +
+        sec('表格', ['cute-table', 'table-merge']) +
+        sec('代码', ['code-lineno', 'code-range']) +
+        sec('模板', ['solution']) +
+        '<div class="lg-note">折叠框标题支持 LaTeX（<code>$$…$$</code>）；' +
+        '表格中 <code>^</code> 向上合并、<code>&lt;</code> 向左合并；' +
+        '代码块用 <code>line-numbers</code> 显示行号、<code>lines=5-6</code> 高亮区间。</div>' +
+        '</div>';
+    }
+
+    ctx.ui.addButton({
+      id: 'luogu',
+      icon: '🌱',
+      title: '洛谷新特性',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '洛谷新特性');
+        body.onclick = function (e) {
+          if (!e.target || !e.target.closest) return;
+          var b = e.target.closest('[data-tpl]');
+          if (!b) return;
+          var raw = TPL[b.getAttribute('data-tpl')];
+          if (!raw) return;
+          var at = raw.indexOf(C);
+          var text = at >= 0 ? raw.slice(0, at) + raw.slice(at + 1) : raw;
+          h.insertText('\n\n' + text + '\n\n', at >= 0 ? at + 2 : undefined);
+          ctx.app.toast('已插入「' + b.textContent + '」');
+        };
+      }
+    });
+  },
+
+  /* 扩展被停用/移除时清理注入的样式 */
+  dispose: function () {
+    var s = document.getElementById('lg-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});
