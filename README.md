@@ -1,4 +1,4 @@
-<img width="513" height="567" alt="image" src="https://github.com/user-attachments/assets/4eefcd07-1dca-4863-b342-a57a19bd0be0" /># A Boat · 功能介绍与扩展选型指南
+# A Boat · 功能介绍与扩展选型指南
 
 ## UPD:
 
