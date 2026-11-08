@@ -1,0 +1,1454 @@
+/* =========================================================
+ * 统计图扩展  (ext-chart.mext)
+ * ---------------------------------------------------------
+ * 声明式图表 DSL：一段数据，多种统计图，零依赖纯内联 SVG。
+ *
+ *   ```chart bar
+ *   title 季度营收
+ *   labels Q1 Q2 Q3 Q4
+ *   series 2024 120 145 132 178
+ *   series 2025 150 168 155 196
+ *   ```
+ *
+ * 也支持 :::chart … :::；围栏首行可写类型或设置。
+ * 支持：bar / line / area / pie / donut / scatter / bubble /
+ *       radar / histogram / heatmap / funnel / boxplot
+ * 特性：自动刻度、图例、数值标签、堆叠/百分比/水平/平滑、
+ *       明暗主题自适应、导出 HTML 不丢图、逐行错误提示。
+ * 与「代码高亮」「几何作图」等扩展互不冲突。
+ * ========================================================= */
+api.register({
+  name: '统计图',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '用 ```chart 代码块绘制柱状/折线/饼图/散点等 12 种统计图',
+  icon: '📊',
+
+  init: function (ctx) {
+
+    /* ---------------- 样式（id 以 -ext-style 结尾，导出时会被收集） ---------------- */
+    var STYLE_ID = 'cht-ext-style';
+    var CSS = [
+      '.cht-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden;',
+      '  --cht-c1:#c2410c;--cht-c2:#0e7490;--cht-c3:#7c3aed;--cht-c4:#15803d;',
+      '  --cht-c5:#b45309;--cht-c6:#be185d;--cht-c7:#1d4ed8;--cht-c8:#4d7c0f}',
+      'html[data-theme="dark"] .cht-figure,html[data-theme="graphite"] .cht-figure{',
+      '  --cht-c1:#ff8a4c;--cht-c2:#38bdf8;--cht-c3:#a78bfa;--cht-c4:#4ade80;',
+      '  --cht-c5:#fbbf24;--cht-c6:#f472b6;--cht-c7:#60a5fa;--cht-c8:#a3e635}',
+      '.cht-figure svg{display:block;width:100%;height:auto;margin:0 auto}',
+      '.cht-bg{fill:var(--panel,#fff)}',
+      '.cht-title{fill:var(--text,#221f1b);font:600 15px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}',
+      '.cht-sub{fill:var(--muted,#8d8880);font:11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}',
+      '.cht-axis{stroke:var(--line-strong,#d8d3c8);stroke-width:1.2;fill:none}',
+      '.cht-grid{stroke:var(--line,#e6e2da);stroke-width:1;fill:none}',
+      '.cht-zero{stroke:var(--muted,#8d8880);stroke-width:1.2;fill:none}',
+      '.cht-tick{fill:var(--muted,#8d8880);font:10.5px var(--font-mono,Consolas,monospace)}',
+      '.cht-lab{fill:var(--text-soft,#4a453f);font:11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}',
+      '.cht-val{fill:var(--text,#221f1b);font:600 10.5px var(--font-mono,Consolas,monospace)}',
+      '.cht-lg{fill:var(--text-soft,#4a453f);font:11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}',
+      '.cht-lg-hit{cursor:default}',
+      '.cht-bar{stroke:none}.cht-slice{stroke:var(--panel,#fff);stroke-width:2;stroke-linejoin:round}',
+      '.cht-line{fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}',
+      '.cht-area{stroke:none;opacity:.16}',
+      '.cht-dot{stroke:var(--panel,#fff);stroke-width:1.6}',
+      '.cht-guide{stroke:var(--line-strong,#d8d3c8);stroke-width:1;fill:none}',
+      '.cht-cell{stroke:var(--panel,#fff);stroke-width:2}',
+      '.cht-outline{fill:none;stroke:var(--line-strong,#d8d3c8);stroke-width:1}',
+      '.cht-hover{transition:opacity .15s ease}.cht-hover:hover{opacity:.7}',
+      '.cht-cap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}',
+      '.cht-cap p{margin:0}',
+      '.cht-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}',
+      '.cht-errbox b{font-weight:650}',
+      '.cht-picker{display:flex;flex-direction:column;gap:.8em;max-height:62vh;overflow:auto;padding-right:4px}',
+      '.cht-picker .cht-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}',
+      '.cht-picker .cht-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4rem}',
+      '.cht-picker .cht-grid2 button{justify-content:flex-start;text-align:left}',
+      '.cht-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}'
+    ].join('\n');
+
+    function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID;
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    ensureStyle();
+
+    /* ---------------- 基础工具 ---------------- */
+    var PH = String.fromCharCode(2);
+    var NL = String.fromCharCode(10);
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function n(v) {
+      var x = Number(v);
+      if (!isFinite(x)) x = 0;
+      return String(Math.round(x * 100) / 100);
+    }
+    function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+    function safeColor(s) {
+      if (!s) return '';
+      s = String(s).trim();
+      if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+      if (/^var\(--[a-z0-9-]+\)$/i.test(s)) return s;
+      if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(s)) return s;
+      return '';
+    }
+    function stripComment(s) {
+      var q = null, out = '';
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (q) { out += c; if (c === q) q = null; continue; }
+        if (c === '"' || c === "'") { q = c; out += c; continue; }
+        var prev = i > 0 ? s.charAt(i - 1) : ' ';
+        var afterSpace = (i === 0 || /\s/.test(prev));
+        // 空白后的 # 通常是注释，但 #c2410c 这类十六进制颜色要保留
+        if (c === '#' && afterSpace) {
+          if (/^[0-9a-fA-F]{3,8}(?![\w-])/.test(s.slice(i + 1))) { out += c; continue; }
+          break;
+        }
+        if (c === '/' && s.charAt(i + 1) === '/' && afterSpace) break;
+        out += c;
+      }
+      return out;
+    }
+    function tokenize(s) {
+      var strs = [], out = '', i = 0;
+      while (i < s.length) {
+        var c = s.charAt(i);
+        if (c === '"' || c === "'") {
+          var q = c, v = ''; i++;
+          while (i < s.length && s.charAt(i) !== q) {
+            if (s.charAt(i) === '\\' && i + 1 < s.length) { v += s.charAt(i + 1); i += 2; }
+            else { v += s.charAt(i); i++; }
+          }
+          i++;
+          strs.push(v);
+          out += PH + (strs.length - 1) + PH;
+          continue;
+        }
+        out += c; i++;
+      }
+      return { text: out, strs: strs };
+    }
+    function expand(s, strs) {
+      var out = '', i = 0;
+      while (i < s.length) {
+        if (s.charAt(i) === PH) {
+          var j = i + 1, k = '';
+          while (j < s.length && s.charAt(j) >= '0' && s.charAt(j) <= '9') { k += s.charAt(j); j++; }
+          if (k !== '' && s.charAt(j) === PH) {
+            out += (strs[+k] == null ? '' : strs[+k]); i = j + 1; continue;
+          }
+        }
+        out += s.charAt(i); i++;
+      }
+      return out;
+    }
+    function lex(line) {
+      var t = tokenize(stripComment(String(line == null ? '' : line)));
+      var raw = t.text.trim();
+      return {
+        toks: raw ? raw.split(/[\s,]+/).map(function (x) { return expand(x, t.strs); }) : [],
+        text: expand(raw, t.strs)
+      };
+    }
+    var RE_NUM = /^[-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?(?:万|亿|[kKmM])?%?$/;
+    function numOf(tok) {
+      if (tok == null || tok === '') return null;
+      var s = String(tok).trim();
+      if (/^(?:-|—|–|null|na|n\/a|nan|none|空|无)$/i.test(s)) return null;
+      s = s.replace(/%$/, '');
+      if (!RE_NUM.test(s)) return NaN;
+      var mul = 1, m = s.match(/^(.*?)(万|亿|[kKmM])$/);
+      if (m && /^[-+0-9.eE]+$/.test(m[1])) {
+        s = m[1];
+        mul = m[2] === '万' ? 1e4 : m[2] === '亿' ? 1e8 :
+              (m[2] === 'k' || m[2] === 'K') ? 1e3 : 1e6;
+      }
+      var v = parseFloat(s) * mul;
+      return isFinite(v) ? v : NaN;
+    }
+    function fmtVal(v) {
+      if (v == null || !isFinite(v)) return '';
+      var a = Math.abs(v);
+      var d = a < 1 && a > 0 ? 2 : (v % 1 === 0 ? 0 : 2);
+      var s = v.toFixed(d);
+      if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+      return s;
+    }
+    function fmtTick(v, step) {
+      var d = step > 0 ? Math.max(0, Math.min(6, -Math.floor(Math.log10(step) + 1e-9))) : 0;
+      if (v % 1 !== 0 && d === 0) d = 1;
+      var s = v.toFixed(d);
+      if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
+      return s;
+    }
+    function niceTicks(lo, hi, count) {
+      if (!isFinite(lo) || !isFinite(hi)) { lo = 0; hi = 1; }
+      if (hi - lo < 1e-9) { hi = lo + 1; }
+      count = count || 5;
+      var raw = (hi - lo) / Math.max(1, count - 1);
+      var mag = Math.pow(10, Math.floor(Math.log(raw) / Math.LN10));
+      var norm = raw / mag, step;
+      if (norm <= 1) step = 1; else if (norm <= 2) step = 2;
+      else if (norm <= 2.5) step = 2.5; else if (norm <= 5) step = 5; else step = 10;
+      step *= mag;
+      var min = Math.floor(lo / step - 1e-9) * step;
+      var max = Math.ceil(hi / step - 1e-9) * step;
+      if (max - min < step * 0.5) max = min + step;
+      var ticks = [], guard = 0;
+      for (var v = min; v <= max + step * 1e-6 && guard++ < 60; v += step) {
+        ticks.push(Math.abs(v) < step * 1e-8 ? 0 : v);
+      }
+      return { min: min, max: max, step: step, ticks: ticks };
+    }
+
+    /* ---------------- 图表类型与解析 ---------------- */
+    var TYPES = {
+      bar: 'bar', bars: 'bar', column: 'bar', '柱状': 'bar',
+      line: 'line', lines: 'line', '折线': 'line',
+      area: 'area', '面积': 'area',
+      pie: 'pie', '饼图': 'pie', '饼': 'pie',
+      donut: 'donut', doughnut: 'donut', ring: 'donut', '环形': 'donut',
+      scatter: 'scatter', '散点': 'scatter',
+      bubble: 'bubble', '气泡': 'bubble',
+      radar: 'radar', spider: 'radar', '雷达': 'radar',
+      histogram: 'histogram', hist: 'histogram', '直方图': 'histogram',
+      heatmap: 'heatmap', heat: 'heatmap', '热力': 'heatmap',
+      funnel: 'funnel', '漏斗': 'funnel',
+      boxplot: 'boxplot', box: 'boxplot', '箱线': 'boxplot'
+    };
+    var ON_OFF = { on: true, off: false, true: true, false: false, yes: true, no: false, '1': true, '0': false };
+    function bool(v, dflt) {
+      if (v == null || v === '') return true;
+      var k = String(v).toLowerCase();
+      return ON_OFF[k] == null ? (dflt == null ? true : dflt) : ON_OFF[k];
+    }
+    function typeName(t) {
+      return ({ bar: '柱状图', line: '折线图', area: '面积图', pie: '饼图', donut: '环形图',
+        scatter: '散点图', bubble: '气泡图', radar: '雷达图', histogram: '直方图',
+        heatmap: '热力图', funnel: '漏斗图', boxplot: '箱线图' })[t] || '统计图';
+    }
+
+    function parseChart(lines) {
+      var c = {
+        type: '', title: '', subtitle: '', caption: '', xlabel: '', ylabel: '', center: '',
+        labels: [], series: [], items: [], points: [], rows: [], cols: [], raw: [],
+        opts: {
+          w: 620, h: 350, legend: '', grid: true, datalabels: false,
+          stacked: false, horizontal: false, percent: false, smooth: false,
+          dots: true, trend: false, sort: '', limit: 0, bins: 0,
+          ticks: 5, hole: 0.58, gap: 0.22, opacity: 0.9, colors: [],
+          min: null, max: null, ymin: null, ymax: null, levels: 4
+        },
+        errs: []
+      };
+      var table = [], inTable = false, noHeader = false;
+
+      function err(line, msg) { c.errs.push({ line: line, msg: msg }); }
+      function nums(toks, from, line) {
+        var out = [];
+        for (var i = from; i < toks.length; i++) {
+          var t = toks[i];
+          if (/^color=/i.test(t) || /^#[0-9a-fA-F]{3,8}$/.test(t)) continue;
+          var v = numOf(t);
+          if (typeof v === 'number' && isNaN(v)) { err(line, '「' + t + '」不是有效数字，已跳过'); out.push(null); }
+          else out.push(v);
+        }
+        return out;
+      }
+      function setOpt(key, val, line) {
+        var o = c.opts;
+        switch (key) {
+          case 'stacked': o.stacked = bool(val); break;
+          case 'horizontal': o.horizontal = bool(val); break;
+          case 'percent': o.percent = bool(val); break;
+          case 'smooth': o.smooth = bool(val); break;
+          case 'dots': o.dots = bool(val); break;
+          case 'trend': o.trend = bool(val); break;
+          case 'grid': o.grid = bool(val); break;
+          case 'datalabels': case 'dlabels': case 'showvalues': o.datalabels = bool(val); break;
+          case 'legend':
+            var lv = String(val || 'on').toLowerCase();
+            o.legend = (lv === 'true' || lv === 'on' || lv === 'yes' || lv === '1') ? 'top' :
+                       (lv === 'false' || lv === 'off' || lv === 'no' || lv === '0') ? 'off' : lv;
+            if (['top', 'bottom', 'right', 'off'].indexOf(o.legend) < 0) o.legend = 'top';
+            break;
+          case 'size': {
+            var m = String(val || '').match(/(\d+)\s*[x×*]\s*(\d+)/);
+            if (m) { o.w = clamp(+m[1], 240, 1400); o.h = clamp(+m[2], 180, 1000); }
+            else err(line, 'size 需写成 宽x高，如 600x340');
+            break;
+          }
+          case 'width': o.w = clamp(parseFloat(val) || 620, 240, 1400); break;
+          case 'height': o.h = clamp(parseFloat(val) || 350, 180, 1000); break;
+          case 'bins': o.bins = clamp(parseInt(val, 10) || 0, 0, 60); break;
+          case 'ticks': o.ticks = clamp(parseInt(val, 10) || 5, 2, 12); break;
+          case 'levels': o.levels = clamp(parseInt(val, 10) || 4, 2, 8); break;
+          case 'hole': o.hole = clamp(parseFloat(val), 0.1, 0.9) || 0.58; break;
+          case 'gap': o.gap = clamp(parseFloat(val), 0, 0.8); if (isNaN(o.gap)) o.gap = 0.22; break;
+          case 'opacity': o.opacity = clamp(parseFloat(val), 0.05, 1); if (isNaN(o.opacity)) o.opacity = 0.9; break;
+          case 'sort': o.sort = String(val || '').toLowerCase(); break;
+          case 'limit': o.limit = Math.max(0, parseInt(val, 10) || 0); break;
+          case 'min': case 'ymin': o.ymin = numOf(val); break;
+          case 'max': case 'ymax': o.ymax = numOf(val); break;
+          case 'colors': case 'palette': {
+            var cs = String(val == null ? '' : val).split(/[\s,]+/).filter(Boolean);
+            o.colors = cs.map(safeColor).filter(Boolean);
+            break;
+          }
+          case 'type': case 'chart': {
+            var t = TYPES[String(val || '').toLowerCase()];
+            if (t) c.type = t; else err(line, '未知图表类型「' + val + '」');
+            break;
+          }
+          default: err(line, '未知设置「' + key + '」');
+        }
+      }
+
+      for (var li = 0; li < lines.length; li++) {
+        var L = lex(lines[li]), toks = L.toks;
+        if (!toks.length) continue;
+        var ln = li + 1, cmd = toks[0].toLowerCase();
+        var rest = toks.slice(1), restText = L.text.slice(toks[0].length).trim();
+
+        if (inTable) {
+          if (cmd === 'end' || cmd === 'enddata' || cmd === 'endtable') { inTable = false; continue; }
+          table.push({ line: ln, toks: toks }); continue;
+        }
+        if (cmd === 'data' || cmd === 'table') {
+          inTable = true;
+          noHeader = /noheader/i.test(restText);
+          continue;
+        }
+        if (toks.length === 1 && TYPES[cmd]) { c.type = TYPES[cmd]; continue; }
+        if (cmd === 'type' || cmd === 'chart') { setOpt('type', rest[0], ln); continue; }
+        if (cmd === 'title' || cmd === 'subtitle' || cmd === 'caption' ||
+            cmd === 'xlabel' || cmd === 'ylabel' || cmd === 'center') {
+          c[cmd] = restText; continue;
+        }
+        if (cmd === 'labels' || cmd === 'categories' || cmd === 'cats' || cmd === 'x') {
+          c.labels = rest.filter(Boolean); continue;
+        }
+        if (cmd === 'cols' || cmd === 'columns') { c.cols = rest.filter(Boolean); continue; }
+        if (cmd === 'series' || cmd === 'serie' || cmd === 's') {
+          if (!rest.length) { err(ln, 'series 需要名称与数值'); continue; }
+          var name = rest[0], cm = restText.match(/\bcolor=(#[0-9a-fA-F]{3,8}|[a-zA-Z][\w-]*)/i);
+          c.series.push({ name: name, color: cm ? safeColor(cm[1]) : '', values: nums(rest, 1, ln) });
+          continue;
+        }
+        if (cmd === 'item' || cmd === 'slice' || cmd === 'i') {
+          if (rest.length < 2) { err(ln, 'item 需要「名称 数值」'); continue; }
+          var v = numOf(rest[1]);
+          if (typeof v === 'number' && isNaN(v)) { err(ln, '「' + rest[1] + '」不是有效数字'); v = null; }
+          c.items.push({ name: rest[0], value: v, color: safeColor(rest[2]) || '' });
+          continue;
+        }
+        if (cmd === 'point' || cmd === 'pt') {
+          // 前三个位置允许数值 / 缺失值，其余（或首个非数值）当作点名称
+          var xy = [], nameParts = [], numericPhase = true;
+          for (var pi = 0; pi < rest.length; pi++) {
+            var tok = rest[pi];
+            var numLike = RE_NUM.test(tok) || /^(?:-|—|–|null|na|n\/a|nan|none|空|无)$/i.test(tok);
+            if (numericPhase && numLike && xy.length < 3) xy.push(numOf(tok));
+            else { numericPhase = false; nameParts.push(tok); }
+          }
+          while (xy.length < 3) xy.push(null);
+          if (xy[0] == null || xy[1] == null || !isFinite(xy[0]) || !isFinite(xy[1])) {
+            err(ln, 'point 至少要有有效的 x 与 y'); continue;
+          }
+          c.points.push({ x: xy[0], y: xy[1], r: xy[2], name: nameParts.join(' '), series: 0 });
+          continue;
+        }
+        if (cmd === 'row') {
+          if (!rest.length) { err(ln, 'row 需要行名与数值'); continue; }
+          c.rows.push({ name: rest[0], values: nums(rest, 1, ln) });
+          continue;
+        }
+        if (cmd === 'values' || cmd === 'raw' || cmd === 'sample') {
+          c.raw = c.raw.concat(nums(rest, 0, ln).filter(function (x) { return x !== null; }));
+          continue;
+        }
+        if (cmd === 'set') {   // set key=value key=value …
+          for (var si = 1; si < toks.length; si++) {
+            var kv = toks[si].match(/^([a-zA-Z][\w-]*)=(.*)$/);
+            if (kv) setOpt(kv[1].toLowerCase(), kv[2], ln);
+            else err(ln, 'set 里「' + toks[si] + '」应写成 key=value');
+          }
+          continue;
+        }
+        if (cmd === 'colors' || cmd === 'palette') { setOpt(cmd, restText, ln); continue; }
+        if (['stacked', 'horizontal', 'percent', 'smooth', 'dots', 'trend', 'grid',
+             'datalabels', 'dlabels', 'showvalues', 'legend', 'size', 'width', 'height',
+             'bins', 'ticks', 'levels', 'hole', 'gap', 'opacity', 'sort', 'limit',
+             'min', 'max'].indexOf(cmd) >= 0) {
+          setOpt(cmd, rest[0], ln); continue;
+        }
+        err(ln, '未知指令「' + toks[0] + '」');
+      }
+
+      /* CSV 表格段：首行默认当表头（第一格是类别列名，其余是系列名） */
+      if (table.length) {
+        var head = noHeader ? null : table[0].toks;
+        var rows = noHeader ? table : table.slice(1);
+        if (!rows.length) err(1, 'data 表格没有数据行');
+        var width = 0;
+        rows.forEach(function (r) { width = Math.max(width, r.toks.length); });
+        if (width < 2) err(1, 'data 表格至少需要两列');
+        if (!c.labels.length) c.labels = rows.map(function (r) { return r.toks[0] || ''; });
+        for (var j = 1; j < width; j++) {
+          var nm = head && head[j] ? head[j] : '系列 ' + j;
+          c.series.push({
+            name: nm, color: '',
+            values: rows.map(function (r) {
+              var v = numOf(r.toks[j]);
+              return (typeof v === 'number' && isNaN(v)) ? null : v;
+            })
+          });
+        }
+      }
+
+      /* 推导与规整 */
+      if (!c.type) c.type = 'bar';
+      var maxLen = 0;
+      c.series.forEach(function (s) { maxLen = Math.max(maxLen, s.values.length); });
+      if (!c.labels.length) {
+        c.labels = [];
+        for (var q = 0; q < maxLen; q++) c.labels.push(String(q + 1));
+      }
+      c.series.forEach(function (s) {
+        while (s.values.length < c.labels.length) s.values.push(null);
+        if (s.values.length > c.labels.length) s.values.length = c.labels.length;
+      });
+
+      if (c.type === 'pie' || c.type === 'donut' || c.type === 'funnel') {
+        if (!c.items.length) {
+          var s0 = c.series[0];
+          if (s0) c.items = c.labels.map(function (lb, k) {
+            return { name: lb, value: s0.values[k], color: '' };
+          });
+          else err(1, typeName(c.type) + '需要 item 名称 数值，或 labels + series');
+        }
+        c.items = c.items.filter(function (it) { return it.name && it.value != null && isFinite(it.value); });
+        if (!c.items.length) err(1, '没有有效的数据项');
+        if (c.type === 'funnel') {
+          // 漏斗保持给定顺序；饼图可排序
+        } else if (c.opts.sort === 'asc' || c.opts.sort === 'desc') {
+          c.items.sort(function (a, b) { return c.opts.sort === 'asc' ? a.value - b.value : b.value - a.value; });
+        }
+        if (c.opts.limit > 0 && c.items.length > c.opts.limit) {
+          var keep = c.items.slice(0, c.opts.limit), restSum = 0;
+          c.items.slice(c.opts.limit).forEach(function (it) { restSum += it.value; });
+          keep.push({ name: '其他', value: restSum, color: '' });
+          c.items = keep;
+        }
+      }
+      if (c.type === 'scatter' || c.type === 'bubble') {
+        if (!c.points.length && c.series.length) {
+          c.series.forEach(function (s, si) {
+            for (var k = 0; k + 1 < s.values.length; k += 2) {
+              if (s.values[k] == null || s.values[k + 1] == null) continue;
+              c.points.push({ x: s.values[k], y: s.values[k + 1],
+                r: c.type === 'bubble' ? s.values[k + 2] : null, name: s.name, series: si });
+              if (c.type === 'bubble') k++;
+            }
+          });
+        }
+        if (!c.points.length) err(1, '散点图需要 point x y [r]，或 series 名称 x y x y …');
+      }
+      if (c.type === 'histogram' && !c.raw.length) {
+        c.series.forEach(function (s) {
+          s.values.forEach(function (v) { if (v != null && isFinite(v)) c.raw.push(v); });
+        });
+        if (!c.raw.length) err(1, '直方图需要 values 1 2 3 … 提供原始数据');
+      }
+      if (c.type === 'heatmap' && !c.rows.length) {
+        // 允许把 series 当作列转置成一行矩阵
+        var m = c.labels.length;
+        for (var ri = 0; ri < m; ri++) {
+          c.rows.push({ name: c.labels[ri], values: c.series.map(function (s) { return s.values[ri]; }) });
+        }
+        if (!c.cols.length) c.cols = c.series.map(function (s) { return s.name; });
+      }
+      if (c.type === 'boxplot' && !c.series.length && c.raw.length) {
+        c.series = [{ name: '数据', color: '', values: c.raw.slice() }];
+      }
+      if (['bar', 'line', 'area', 'radar'].indexOf(c.type) >= 0 && !c.series.length) {
+        err(1, typeName(c.type) + '需要至少一组 series 名称 数值…');
+      }
+      if (c.opts.legend === '') {
+        c.opts.legend = (c.series.length > 1) ? 'top' :
+          (c.type === 'pie' || c.type === 'donut' || c.type === 'funnel') ? 'off' : 'off';
+      }
+      return c;
+    }
+
+    /* ---------------- SVG 公共构件 ---------------- */
+    function col(i, custom) {
+      if (custom) return custom;
+      var o = current.opts.colors;
+      if (o && o[i]) return o[i];
+      return 'var(--cht-c' + ((i % 8) + 1) + ')';
+    }
+    var current = null;   // 当前正在渲染的 cfg（供 col 使用）
+
+    function T(s, x, y, cls, extra) {
+      return '<text class="' + cls + '" x="' + n(x) + '" y="' + n(y) + '"' +
+        (extra || '') + '>' + esc(s) + '</text>';
+    }
+    function tip(s) { return '<title>' + esc(s) + '</title>'; }
+    function attrStyle(props) {
+      var out = [];
+      for (var k in props) if (props.hasOwnProperty(k)) out.push(k + ':' + props[k]);
+      return ' style="' + out.join(';') + '"';
+    }
+    function svgDoc(c, inner) {
+      var W = c.opts.w, H = c.opts.h;
+      var out = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H +
+        '" role="img" aria-label="' + esc(c.title || typeName(c.type)) + '">' +
+        '<title>' + esc(c.title || typeName(c.type)) + '</title>' +
+        '<rect class="cht-bg" x="0" y="0" width="' + W + '" height="' + H + '"/>';
+      if (c.title) out += T(c.title, W / 2, 25, 'cht-title', ' text-anchor="middle"');
+      if (c.subtitle) out += T(c.subtitle, W / 2, c.title ? 43 : 25, 'cht-sub', ' text-anchor="middle"');
+      return out + inner + '</svg>';
+    }
+    function layout(c, needX, needY, rot) {
+      var W = c.opts.w, H = c.opts.h, o = c.opts;
+      var top = 12 + (c.title ? 22 : 0) + (c.subtitle ? 17 : 0);
+      var lg = o.legend;
+      var extraTop = (lg === 'top' ? 26 : 0);
+      var extraRight = (lg === 'right' ? 112 : 0);
+      var extraBottom = (lg === 'bottom' ? 26 : 0) + (c.xlabel ? 18 : 0);
+      var left = (needY ? 46 : 14) + (c.ylabel ? 16 : 0);
+      var right = 14 + extraRight;
+      var bottom = (needX ? (rot ? 48 : 30) : 12) + extraBottom;
+      return {
+        x: left, y: top + extraTop,
+        w: Math.max(40, W - left - right),
+        h: Math.max(40, H - top - extraTop - bottom),
+        W: W, H: H, bottom: bottom, top: top + extraTop
+      };
+    }
+    function legendSvg(c, entries, p) {
+      var lg = c.opts.legend;
+      if (!lg || lg === 'off' || !entries.length) return '';
+      var out = '', i, x, y;
+      if (lg === 'right') {
+        x = p.x + p.w + 14;
+        y = p.y + 8;
+        for (i = 0; i < entries.length && i < 14; i++) {
+          out += '<rect x="' + n(x) + '" y="' + n(y - 8 + i * 20) + '" width="11" height="11" rx="2"' +
+            attrStyle({ fill: entries[i].color }) + '/>' +
+            T(entries[i].name, x + 17, y + 1 + i * 20, 'cht-lg');
+        }
+      } else {
+        var bottomMode = lg === 'bottom';
+        var unit = 0, total = 0;
+        entries.forEach(function (e) { unit += Math.max(46, String(e.name).length * 8 + 30); });
+        total = unit;
+        var startX = Math.max(10, (p.W - total) / 2);
+        y = bottomMode ? p.H - (c.xlabel ? 24 : 8) : p.top - 10;
+        x = startX;
+        for (i = 0; i < entries.length && i < 12; i++) {
+          var e = entries[i], w = Math.max(46, String(e.name).length * 8 + 30);
+          out += '<rect x="' + n(x) + '" y="' + n(y - 9) + '" width="11" height="11" rx="2"' +
+            attrStyle({ fill: e.color }) + '/>' + T(e.name, x + 17, y, 'cht-lg');
+          x += w;
+        }
+      }
+      return out;
+    }
+    function seriesEntries(c) {
+      return c.series.map(function (s, i) { return { name: s.name, color: col(i, s.color) }; });
+    }
+    function itemEntries(c) {
+      return c.items.map(function (it, i) { return { name: it.name, color: col(i, it.color) }; });
+    }
+    function drawGridY(c, p, tk, sy) {
+      if (!c.opts.grid) return '';
+      var out = '';
+      tk.ticks.forEach(function (t) {
+        out += '<line class="cht-grid" x1="' + n(p.x) + '" y1="' + n(sy(t)) +
+          '" x2="' + n(p.x + p.w) + '" y2="' + n(sy(t)) + '"/>';
+      });
+      return out;
+    }
+    function drawAxisY(c, p, tk, sy, suffix) {
+      var out = '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y) +
+        '" x2="' + n(p.x) + '" y2="' + n(p.y + p.h) + '"/>';
+      tk.ticks.forEach(function (t) {
+        out += T(fmtTick(t, tk.step) + (suffix || ''), p.x - 8, sy(t) + 3.5, 'cht-tick', ' text-anchor="end"');
+      });
+      if (c.ylabel) out += T(c.ylabel, 14, p.y + p.h / 2, 'cht-lab',
+        ' text-anchor="middle" transform="rotate(-90 14 ' + n(p.y + p.h / 2) + ')"');
+      return out;
+    }
+    function drawAxisX(c, p, labels, posFn, rot) {
+      var out = '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y + p.h) +
+        '" x2="' + n(p.x + p.w) + '" y2="' + n(p.y + p.h) + '"/>';
+      labels.forEach(function (lb, i) {
+        var x = posFn(i);
+        if (rot) out += T(lb, x + 3, p.y + p.h + 15, 'cht-lab',
+          ' text-anchor="end" transform="rotate(-32 ' + n(x + 3) + ' ' + n(p.y + p.h + 15) + ')"');
+        else out += T(lb, x, p.y + p.h + 17, 'cht-lab', ' text-anchor="middle"');
+      });
+      if (c.xlabel) out += T(c.xlabel, p.x + p.w / 2, p.H - 7, 'cht-lab', ' text-anchor="middle"');
+      return out;
+    }
+    function needRot(c, p) {
+      var maxLen = 0;
+      c.labels.forEach(function (s) { maxLen = Math.max(maxLen, String(s).length); });
+      return c.labels.length > 8 || (maxLen > 4 && p.w / Math.max(1, c.labels.length) < 62);
+    }
+    function valueRange(c, extraLo, extraHi) {
+      var o = c.opts;
+      var lo = o.ymin != null ? o.ymin : (extraLo == null ? 0 : extraLo);
+      var hi = o.ymax != null ? o.ymax : (extraHi == null ? 1 : extraHi);
+      if (hi <= lo) hi = lo + 1;
+      return niceTicks(lo, hi, o.ticks);
+    }
+
+    /* ---------------- 1. 柱状图 ---------------- */
+    function renderBar(c) {
+      var o = c.opts, S = c.series, L = c.labels;
+      var stacked = o.stacked || o.percent, horiz = o.horizontal;
+      var lo = 0, hi = 0, i, k;
+      if (stacked) {
+        for (k = 0; k < L.length; k++) {
+          var pos = 0, neg = 0, sum = 0;
+          S.forEach(function (s) { var v = s.values[k] || 0; if (v >= 0) pos += v; else neg += v; sum += Math.abs(v); });
+          var norm = o.percent && sum > 0 ? 100 / sum : 1;
+          lo = Math.min(lo, neg * norm); hi = Math.max(hi, pos * norm);
+        }
+      } else {
+        S.forEach(function (s) { s.values.forEach(function (v) { if (v == null) return; lo = Math.min(lo, v); hi = Math.max(hi, v); }); });
+      }
+      if (o.percent) { lo = 0; hi = 100; }
+      var tk = valueRange(c, lo, hi);
+      if (o.percent) tk = { min: 0, max: 100, step: 20, ticks: [0, 20, 40, 60, 80, 100] };
+      var p = layout(c, true, true, false);
+      var sy = function (v) { return p.y + p.h - (v - tk.min) / (tk.max - tk.min) * p.h; };
+      var sx = function (v) { return p.x + (v - tk.min) / (tk.max - tk.min) * p.w; };
+      var z = horiz ? sx(0) : sy(0);
+      var out = '';
+      if (horiz) {
+        tk.ticks.forEach(function (t) {
+          if (o.grid) out += '<line class="cht-grid" x1="' + n(sx(t)) + '" y1="' + n(p.y) +
+            '" x2="' + n(sx(t)) + '" y2="' + n(p.y + p.h) + '"/>';
+          out += T(fmtTick(t, tk.step) + (o.percent ? '%' : ''), sx(t), p.y + p.h + 17, 'cht-tick', ' text-anchor="middle"');
+        });
+        out += '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y + p.h) + '" x2="' + n(p.x + p.w) + '" y2="' + n(p.y + p.h) + '"/>';
+        L.forEach(function (lb, idx) {
+          out += T(lb, p.x - 8, p.y + (idx + 0.5) * p.h / L.length + 4, 'cht-lab', ' text-anchor="end"');
+        });
+        if (c.xlabel) out += T(c.xlabel, p.x + p.w / 2, p.H - 7, 'cht-lab', ' text-anchor="middle"');
+      } else {
+        out += drawGridY(c, p, tk, sy) + drawAxisY(c, p, tk, sy, o.percent ? '%' : '');
+        out += drawAxisX(c, p, L, function (i) { return p.x + (i + 0.5) * p.w / L.length; }, needRot(c, p));
+      }
+      if (!horiz && tk.min < 0 && tk.max > 0) {
+        out += '<line class="cht-zero" x1="' + n(p.x) + '" y1="' + n(z) + '" x2="' + n(p.x + p.w) + '" y2="' + n(z) + '"/>';
+      }
+      var groupH = (horiz ? p.h : p.w) / Math.max(1, L.length);
+      var labelLayer = '';   // 数值标签最后统一绘制，避免被后画的柱段盖住
+      for (k = 0; k < L.length; k++) {
+        var g0 = (horiz ? p.y : p.x) + k * groupH;
+        var sumAbs = 0, norm = 1;
+        if (stacked) {
+          S.forEach(function (s) { sumAbs += Math.abs(s.values[k] || 0); });
+          norm = o.percent && sumAbs > 0 ? 100 / sumAbs : 1;
+        }
+        var accPos = 0, accNeg = 0;
+        S.forEach(function (s, si) {
+          var raw = s.values[k];
+          if (raw == null) return;
+          var v = raw * norm, fill = col(si, s.color);
+          var bx, by, bw, bh;
+          if (stacked) {
+            var a = v >= 0 ? accPos : accNeg;
+            var b = a + v;
+            if (v >= 0) accPos = b; else accNeg = b;
+            var main = groupH * 0.62, off = (groupH - main) / 2;
+            if (horiz) { bx = sx(Math.min(a, b)); by = g0 + off; bw = Math.abs(sx(b) - sx(a)); bh = main; }
+            else { bx = g0 + off; by = sy(Math.max(a, b)); bw = main; bh = Math.abs(sy(b) - sy(a)); }
+          } else {
+            var slot = groupH * (1 - o.gap * 2) / S.length;
+            var bw2 = slot * 0.86;
+            var start = g0 + groupH * o.gap;
+            if (horiz) { bx = Math.min(z, sx(v)); by = start + si * slot + (slot - bw2) / 2; bw = Math.abs(sx(v) - z); bh = bw2; }
+            else { bx = start + si * slot + (slot - bw2) / 2; by = Math.min(z, sy(v)); bw = bw2; bh = Math.abs(sy(v) - z); }
+          }
+          if (bw < 0.4 || bh < 0.4) return;
+          out += '<rect class="cht-bar cht-hover" x="' + n(bx) + '" y="' + n(by) +
+            '" width="' + n(bw) + '" height="' + n(bh) + '" rx="1.5"' +
+            attrStyle({ fill: fill, opacity: o.opacity }) + '>' +
+            tip(L[k] + ' · ' + s.name + '：' + fmtVal(o.percent ? v : raw) + (o.percent ? '%' : '')) + '</rect>';
+          if (o.datalabels) {
+            var label = fmtVal(o.percent ? v : raw) + (o.percent ? '%' : '');
+            if (stacked) {
+              // 堆叠段内居中，用背景色文字保证在彩色块上可读
+              var cxL = bx + bw / 2, cyL = by + bh / 2 + 3.5;
+              if (bh > 13) labelLayer += T(label, cxL, cyL, 'cht-val',
+                ' text-anchor="middle" style="fill:var(--bg,#fff)"');
+            } else if (horiz) {
+              labelLayer += T(label, bx + bw + 4, by + bh / 2 + 3.5, 'cht-val');
+            } else {
+              var ly = v < 0 ? by + bh + 12 : by - 4;
+              labelLayer += T(label, bx + bw / 2, ly, 'cht-val', ' text-anchor="middle"');
+            }
+          }
+        });
+      }
+      out += labelLayer;
+      out += legendSvg(c, seriesEntries(c), p);
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 2. 折线 / 面积图 ---------------- */
+    function smoothPath(pts) {
+      if (!pts.length) return '';
+      if (pts.length === 1) return 'M' + n(pts[0].x) + ',' + n(pts[0].y);
+      var d = 'M' + n(pts[0].x) + ',' + n(pts[0].y), i;
+      for (i = 0; i < pts.length - 1; i++) {
+        var p0 = pts[i - 1] || pts[i], p1 = pts[i], p2 = pts[i + 1], p3 = pts[i + 2] || p2;
+        var c1x = p1.x + (p2.x - p0.x) / 6, c1y = p1.y + (p2.y - p0.y) / 6;
+        var c2x = p2.x - (p3.x - p1.x) / 6, c2y = p2.y - (p3.y - p1.y) / 6;
+        d += ' C' + n(c1x) + ',' + n(c1y) + ' ' + n(c2x) + ',' + n(c2y) + ' ' + n(p2.x) + ',' + n(p2.y);
+      }
+      return d;
+    }
+    function linePath(pts) {
+      return pts.map(function (p, i) { return (i ? 'L' : 'M') + n(p.x) + ',' + n(p.y); }).join(' ');
+    }
+    function renderLine(c) {
+      var o = c.opts, S = c.series, L = c.labels, isArea = c.type === 'area';
+      var lo = 0, hi = 0;
+      if (o.stacked) {
+        for (var k = 0; k < L.length; k++) {
+          var pos = 0, neg = 0;
+          S.forEach(function (s) { var v = s.values[k] || 0; if (v >= 0) pos += v; else neg += v; });
+          lo = Math.min(lo, neg); hi = Math.max(hi, pos);
+        }
+      } else {
+        S.forEach(function (s) { s.values.forEach(function (v) { if (v == null) return; lo = Math.min(lo, v); hi = Math.max(hi, v); }); });
+      }
+      if (hi - lo < 1e-9) hi = lo + 1;
+      var tk = valueRange(c, lo, hi);
+      var p = layout(c, true, true, false);
+      var sy = function (v) { return p.y + p.h - (v - tk.min) / (tk.max - tk.min) * p.h; };
+      var sx = function (i) { return p.x + (L.length === 1 ? p.w / 2 : i * p.w / (L.length - 1)); };
+      var y0 = clamp(sy(0), p.y, p.y + p.h);
+      var out = drawGridY(c, p, tk, sy) + drawAxisY(c, p, tk, sy) +
+        drawAxisX(c, p, L, sx, needRot(c, p));
+      var acc = L.map(function () { return 0; });
+      S.forEach(function (s, si) {
+        var fill = col(si, s.color), pts = [];
+        s.values.forEach(function (v, i) {
+          if (v == null) return;
+          var yv = o.stacked ? acc[i] + v : v;
+          if (o.stacked) acc[i] = yv;
+          pts.push({ x: sx(i), y: sy(yv), v: v, i: i });
+        });
+        if (!pts.length) return;
+        var d = o.smooth ? smoothPath(pts) : linePath(pts);
+        if (isArea || o.stacked) {
+          var base = o.stacked && si > 0 ? null : y0;
+          // 堆叠面积用上一系列作为下边界（简化：填充到基线，半透明叠加）
+          var area = d + ' L' + n(pts[pts.length - 1].x) + ',' + n(base == null ? y0 : base) +
+                     ' L' + n(pts[0].x) + ',' + n(base == null ? y0 : base) + ' Z';
+          out += '<path class="cht-area" d="' + area + '"' + attrStyle({ fill: fill }) + '/>';
+        }
+        out += '<path class="cht-line" d="' + d + '"' + attrStyle({ stroke: fill }) + '/>';
+        if (o.dots || !isArea) {
+          pts.forEach(function (pt) {
+            out += '<circle class="cht-dot" cx="' + n(pt.x) + '" cy="' + n(pt.y) + '" r="3.4"' +
+              attrStyle({ fill: fill }) + '>' + tip(s.name + ' · ' + (L[pt.i] || '') + '：' + fmtVal(pt.v)) + '</circle>';
+          });
+        }
+        if (o.datalabels) {
+          pts.forEach(function (pt) {
+            out += T(fmtVal(pt.v), pt.x, pt.y - 9, 'cht-val', ' text-anchor="middle"');
+          });
+        }
+      });
+      out += legendSvg(c, seriesEntries(c), p);
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 3. 饼图 / 环形图 ---------------- */
+    function renderPie(c) {
+      var o = c.opts, W = o.w, H = o.h, donut = c.type === 'donut';
+      var lg = o.legend;
+      var freeR = lg === 'right' ? 100 : 0;
+      var top = 12 + (c.title ? 22 : 0) + (c.subtitle ? 17 : 0) + (lg === 'top' ? 26 : 0);
+      var bottom = (lg === 'bottom' ? 26 : 0) + (c.xlabel ? 16 : 0) + 12;
+      var availW = W - 28 - freeR, availH = H - top - bottom;
+      var r = Math.max(30, Math.min(availW * 0.36, availH * 0.42));
+      var cx = 14 + availW / 2, cy = top + availH / 2;
+      var items = c.items.filter(function (it) { return it.value > 0; });
+      var total = items.reduce(function (a, b) { return a + b.value; }, 0);
+      var out = '';
+      if (total <= 0) { c.errs.push({ line: 1, msg: '数值之和需大于 0' }); return svgDoc(c, out); }
+      var ri = r * o.hole, ang = -Math.PI / 2;
+      items.forEach(function (it, i) {
+        var frac = it.value / total, sweep = frac * Math.PI * 2;
+        var a0 = ang, a1 = ang + sweep, mid = (a0 + a1) / 2;
+        var fill = col(i, it.color);
+        var x0 = cx + r * Math.cos(a0), y0 = cy + r * Math.sin(a0);
+        var x1 = cx + r * Math.cos(a1), y1 = cy + r * Math.sin(a1);
+        var large = sweep > Math.PI ? 1 : 0;
+        var d;
+        if (frac >= 0.9999) {
+          if (donut) {
+            d = 'M' + n(cx + r) + ',' + n(cy) +
+                ' A' + n(r) + ',' + n(r) + ' 0 1 1 ' + n(cx - r) + ',' + n(cy) +
+                ' A' + n(r) + ',' + n(r) + ' 0 1 1 ' + n(cx + r) + ',' + n(cy) + ' Z' +
+                ' M' + n(cx + ri) + ',' + n(cy) +
+                ' A' + n(ri) + ',' + n(ri) + ' 0 1 0 ' + n(cx - ri) + ',' + n(cy) +
+                ' A' + n(ri) + ',' + n(ri) + ' 0 1 0 ' + n(cx + ri) + ',' + n(cy) + ' Z';
+          } else {
+            out += '<circle class="cht-slice cht-hover" cx="' + n(cx) + '" cy="' + n(cy) + '" r="' + n(r) + '"' +
+              attrStyle({ fill: fill, 'fill-rule': 'evenodd' }) + '>' +
+              tip(it.name + '：' + fmtVal(it.value) + '（100%）') + '</circle>';
+            ang = a1; return;
+          }
+        } else if (donut) {
+          var xi0 = cx + ri * Math.cos(a0), yi0 = cy + ri * Math.sin(a0);
+          var xi1 = cx + ri * Math.cos(a1), yi1 = cy + ri * Math.sin(a1);
+          d = 'M' + n(xi0) + ',' + n(yi0) + ' L' + n(x0) + ',' + n(y0) +
+              ' A' + n(r) + ',' + n(r) + ' 0 ' + large + ' 1 ' + n(x1) + ',' + n(y1) +
+              ' L' + n(xi1) + ',' + n(yi1) +
+              ' A' + n(ri) + ',' + n(ri) + ' 0 ' + large + ' 0 ' + n(xi0) + ',' + n(yi0) + ' Z';
+        } else {
+          d = 'M' + n(cx) + ',' + n(cy) + ' L' + n(x0) + ',' + n(y0) +
+              ' A' + n(r) + ',' + n(r) + ' 0 ' + large + ' 1 ' + n(x1) + ',' + n(y1) + ' Z';
+        }
+        out += '<path class="cht-slice cht-hover" d="' + d + '"' +
+          attrStyle({ fill: fill, 'fill-rule': 'evenodd', opacity: o.opacity }) + '>' +
+          tip(it.name + '：' + fmtVal(it.value) + '（' + (frac * 100).toFixed(1) + '%）') + '</path>';
+        // 外侧标签 + 引导线
+        var pct = (frac * 100).toFixed(1).replace(/\.0$/, '') + '%';
+        var lx = cx + (r + 12) * Math.cos(mid), ly = cy + (r + 12) * Math.sin(mid);
+        var ex = cx + (r + 26) * Math.cos(mid), ey = cy + (r + 26) * Math.sin(mid);
+        var right = Math.cos(mid) >= 0;
+        out += '<path class="cht-guide" d="M' + n(lx) + ',' + n(ly) + ' L' + n(ex) + ',' + n(ey) +
+          ' L' + n(ex + (right ? 9 : -9)) + ',' + n(ey) + '"/>';
+        var label = o.datalabels ? it.name + ' ' + fmtVal(it.value) : it.name + ' ' + pct;
+        out += T(label, ex + (right ? 12 : -12), ey + 3.5, 'cht-lab',
+          ' text-anchor="' + (right ? 'start' : 'end') + '"');
+        ang = a1;
+      });
+      if (donut) {
+        if (c.center) out += T(c.center, cx, cy + 5, 'cht-title', ' text-anchor="middle"');
+        else out += T(fmtVal(total), cx, cy + 2, 'cht-title', ' text-anchor="middle"') +
+                    T('总计', cx, cy + 18, 'cht-sub', ' text-anchor="middle"');
+      }
+      out += legendSvg(c, itemEntries(c), { x: cx - r, y: top, w: r * 2, h: r * 2, W: W, H: H, top: top });
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 4. 散点 / 气泡图 ---------------- */
+    function renderScatter(c) {
+      var o = c.opts, pts = c.points.filter(function (p) {
+        return p.x != null && p.y != null && isFinite(p.x) && isFinite(p.y);
+      });
+      if (!pts.length) return svgDoc(c, '');
+      var xs = pts.map(function (p) { return p.x; }), ys = pts.map(function (p) { return p.y; });
+      var xlo = Math.min.apply(null, xs), xhi = Math.max.apply(null, xs);
+      var ylo = Math.min.apply(null, ys), yhi = Math.max.apply(null, ys);
+      var xpad = (xhi - xlo || 1) * 0.12, ypad = (yhi - ylo || 1) * 0.12;
+      var tkx = niceTicks(xlo - xpad, xhi + xpad, o.ticks);
+      var tky = o.ymin != null || o.ymax != null
+        ? niceTicks(o.ymin != null ? o.ymin : ylo - ypad, o.ymax != null ? o.ymax : yhi + ypad, o.ticks)
+        : niceTicks(ylo - ypad, yhi + ypad, o.ticks);
+      var p = layout(c, true, true, false);
+      var sx = function (v) { return p.x + (v - tkx.min) / (tkx.max - tkx.min) * p.w; };
+      var sy = function (v) { return p.y + p.h - (v - tky.min) / (tky.max - tky.min) * p.h; };
+      var out = '';
+      if (o.grid) {
+        tky.ticks.forEach(function (t) {
+          out += '<line class="cht-grid" x1="' + n(p.x) + '" y1="' + n(sy(t)) +
+            '" x2="' + n(p.x + p.w) + '" y2="' + n(sy(t)) + '"/>';
+        });
+        tkx.ticks.forEach(function (t) {
+          out += '<line class="cht-grid" x1="' + n(sx(t)) + '" y1="' + n(p.y) +
+            '" x2="' + n(sx(t)) + '" y2="' + n(p.y + p.h) + '"/>';
+        });
+      }
+      out += '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y) + '" x2="' + n(p.x) + '" y2="' + n(p.y + p.h) + '"/>' +
+             '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y + p.h) + '" x2="' + n(p.x + p.w) + '" y2="' + n(p.y + p.h) + '"/>';
+      tky.ticks.forEach(function (t) {
+        out += T(fmtTick(t, tky.step), p.x - 8, sy(t) + 3.5, 'cht-tick', ' text-anchor="end"');
+      });
+      tkx.ticks.forEach(function (t) {
+        out += T(fmtTick(t, tkx.step), sx(t), p.y + p.h + 17, 'cht-tick', ' text-anchor="middle"');
+      });
+      if (c.xlabel) out += T(c.xlabel, p.x + p.w / 2, p.H - 7, 'cht-lab', ' text-anchor="middle"');
+      if (c.ylabel) out += T(c.ylabel, 14, p.y + p.h / 2, 'cht-lab',
+        ' text-anchor="middle" transform="rotate(-90 14 ' + n(p.y + p.h / 2) + ')"');
+      if (o.trend && pts.length > 1) {
+        var nP = pts.length, sx1 = 0, sy1 = 0, sxy = 0, sxx = 0;
+        pts.forEach(function (q) { sx1 += q.x; sy1 += q.y; sxy += q.x * q.y; sxx += q.x * q.x; });
+        var den = nP * sxx - sx1 * sx1;
+        if (Math.abs(den) > 1e-9) {
+          var a = (nP * sxy - sx1 * sy1) / den, b = (sy1 - a * sx1) / nP;
+          out += '<line class="cht-line" x1="' + n(sx(tkx.min)) + '" y1="' + n(sy(a * tkx.min + b)) +
+            '" x2="' + n(sx(tkx.max)) + '" y2="' + n(sy(a * tkx.max + b)) + '"' +
+            attrStyle({ stroke: 'var(--muted)', 'stroke-dasharray': '6 4', 'stroke-width': '1.6' }) + '/>';
+        }
+      }
+      var rs = pts.map(function (q) { return q.r; }).filter(function (v) { return v != null && isFinite(v); });
+      var rmin = rs.length ? Math.min.apply(null, rs) : 0, rmax = rs.length ? Math.max.apply(null, rs) : 1;
+      pts.forEach(function (q, i) {
+        var rad = c.type === 'bubble' && q.r != null
+          ? 4 + 18 * (rmax > rmin ? (q.r - rmin) / (rmax - rmin) : 0.5) : 4.6;
+        var fill = col(q.series || 0);
+        out += '<circle class="cht-hover" cx="' + n(sx(q.x)) + '" cy="' + n(sy(q.y)) + '" r="' + n(rad) + '"' +
+          attrStyle({ fill: fill, opacity: 0.72, stroke: 'var(--panel,#fff)', 'stroke-width': '1.4' }) + '>' +
+          tip((q.name ? q.name + ' · ' : '') + '(' + fmtVal(q.x) + ', ' + fmtVal(q.y) + ')' +
+              (q.r != null ? ' · ' + fmtVal(q.r) : '')) + '</circle>';
+        if (q.name && o.datalabels) out += T(q.name, sx(q.x), sy(q.y) - rad - 4, 'cht-lab', ' text-anchor="middle"');
+      });
+      if (c.series.length > 1) out += legendSvg(c, seriesEntries(c), p);
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 5. 雷达图 ---------------- */
+    function renderRadar(c) {
+      var o = c.opts, L = c.labels, S = c.series, W = o.w, H = o.h;
+      var dims = L.length;
+      if (dims < 3) { c.errs.push({ line: 1, msg: '雷达图至少需要 3 个维度（labels）' }); dims = Math.max(3, dims); }
+      var lg = o.legend;
+      var top = 12 + (c.title ? 22 : 0) + (c.subtitle ? 17 : 0) + (lg === 'top' ? 26 : 0);
+      var bottom = (lg === 'bottom' ? 28 : 0) + 14;
+      var side = lg === 'right' ? 112 : 14;
+      var r = Math.max(30, Math.min((W - 2 * side) * 0.36, (H - top - bottom) * 0.42));
+      var cx = side + (W - 2 * side) / 2, cy = top + (H - top - bottom) / 2;
+      var mx = 0;
+      S.forEach(function (s) { s.values.forEach(function (v) { if (v != null) mx = Math.max(mx, v); }); });
+      if (o.ymax != null) mx = o.ymax;
+      if (mx <= 0) mx = 1;
+      var tk = niceTicks(0, mx, o.ticks);
+      mx = tk.max;
+      var angOf = function (i) { return -Math.PI / 2 + i * 2 * Math.PI / dims; };
+      var ptOf = function (i, v) {
+        var rr = r * clamp(v / mx, 0, 1), a = angOf(i);
+        return { x: cx + rr * Math.cos(a), y: cy + rr * Math.sin(a) };
+      };
+      var out = '', lv, i;
+      for (lv = 1; lv <= o.levels; lv++) {
+        var poly = [];
+        for (i = 0; i < dims; i++) { var q = ptOf(i, mx * lv / o.levels); poly.push(n(q.x) + ',' + n(q.y)); }
+        out += '<polygon class="cht-outline" points="' + poly.join(' ') + '"/>';
+      }
+      tk.ticks.forEach(function (t) {
+        if (t <= 0 || t > mx) return;
+        out += T(fmtTick(t, tk.step), cx + 4, cy - r * t / mx + 3.5, 'cht-tick');
+      });
+      for (i = 0; i < dims; i++) {
+        var e = ptOf(i, mx);
+        out += '<line class="cht-grid" x1="' + n(cx) + '" y1="' + n(cy) + '" x2="' + n(e.x) + '" y2="' + n(e.y) + '"/>';
+        var lp = { x: cx + (r + 20) * Math.cos(angOf(i)), y: cy + (r + 20) * Math.sin(angOf(i)) };
+        var anchor = Math.abs(lp.x - cx) < 6 ? 'middle' : (lp.x > cx ? 'start' : 'end');
+        out += T(L[i] || '', lp.x, lp.y + 4, 'cht-lab', ' text-anchor="' + anchor + '"');
+      }
+      S.forEach(function (s, si) {
+        var fill = col(si, s.color), poly = [], verts = [];
+        for (i = 0; i < dims; i++) {
+          var q = ptOf(i, s.values[i] == null ? 0 : s.values[i]);
+          poly.push(n(q.x) + ',' + n(q.y)); verts.push(q);
+        }
+        out += '<polygon class="cht-hover" points="' + poly.join(' ') + '"' +
+          attrStyle({ fill: fill, 'fill-opacity': 0.16, stroke: fill, 'stroke-width': 2, 'stroke-linejoin': 'round' }) + '/>';
+        verts.forEach(function (q, k) {
+          out += '<circle class="cht-dot" cx="' + n(q.x) + '" cy="' + n(q.y) + '" r="3"' +
+            attrStyle({ fill: fill }) + '>' + tip(s.name + ' · ' + (L[k] || '') + '：' + fmtVal(s.values[k])) + '</circle>';
+        });
+      });
+      out += legendSvg(c, seriesEntries(c), { x: cx - r, y: top, w: r * 2, h: r * 2, W: W, H: H, top: top });
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 6. 直方图 ---------------- */
+    function renderHistogram(c) {
+      var o = c.opts, raw = c.raw.filter(function (v) { return isFinite(v); });
+      if (!raw.length) return svgDoc(c, '');
+      var lo = o.ymin != null ? o.ymin : Math.min.apply(null, raw);
+      var hi = o.ymax != null ? o.ymax : Math.max.apply(null, raw);
+      if (hi <= lo) hi = lo + 1;
+      var nb = o.bins || Math.max(4, Math.min(24, Math.ceil(Math.sqrt(raw.length))));
+      var width = (hi - lo) / nb, counts = [];
+      for (var b = 0; b < nb; b++) counts.push(0);
+      raw.forEach(function (v) {
+        var idx = Math.floor((v - lo) / width);
+        if (idx >= nb) idx = nb - 1; if (idx < 0) idx = 0;
+        counts[idx]++;
+      });
+      var tk = valueRange(c, 0, Math.max.apply(null, counts));
+      var p = layout(c, true, true, false);
+      var sy = function (v) { return p.y + p.h - (v - tk.min) / (tk.max - tk.min) * p.h; };
+      var sx = function (v) { return p.x + (v - lo) / (hi - lo) * p.w; };
+      var out = drawGridY(c, p, tk, sy) + drawAxisY(c, p, tk, sy);
+      out += '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y + p.h) +
+        '" x2="' + n(p.x + p.w) + '" y2="' + n(p.y + p.h) + '"/>';
+      var stepLbl = Math.max(1, Math.ceil(nb / 8));
+      for (var q = 0; q <= nb; q += stepLbl) {
+        out += T(fmtVal(lo + q * width), sx(lo + q * width), p.y + p.h + 17, 'cht-tick', ' text-anchor="middle"');
+      }
+      if (c.xlabel) out += T(c.xlabel, p.x + p.w / 2, p.H - 7, 'cht-lab', ' text-anchor="middle"');
+      counts.forEach(function (cnt, i) {
+        var x0 = sx(lo + i * width), x1 = sx(lo + (i + 1) * width);
+        var bw = Math.max(1, x1 - x0 - 1), y = sy(cnt), bh = p.y + p.h - y;
+        out += '<rect class="cht-bar cht-hover" x="' + n(x0 + 0.5) + '" y="' + n(y) +
+          '" width="' + n(bw) + '" height="' + n(Math.max(0, bh)) + '"' +
+          attrStyle({ fill: col(0), opacity: o.opacity }) + '>' +
+          tip('[' + fmtVal(lo + i * width) + ', ' + fmtVal(lo + (i + 1) * width) + ')：' + cnt + ' 个') + '</rect>';
+        if (o.datalabels && cnt > 0) out += T(cnt, (x0 + x1) / 2, y - 4, 'cht-val', ' text-anchor="middle"');
+      });
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 7. 热力图 ---------------- */
+    function renderHeatmap(c) {
+      var o = c.opts, rows = c.rows;
+      if (!rows.length) return svgDoc(c, '');
+      var nCols = 0;
+      rows.forEach(function (r) { nCols = Math.max(nCols, r.values.length); });
+      if (!c.cols.length) { c.cols = []; for (var q = 0; q < nCols; q++) c.cols.push('列 ' + (q + 1)); }
+      var W = o.w, H = o.h;
+      var lg = o.legend;
+      var top = 12 + (c.title ? 22 : 0) + (c.subtitle ? 17 : 0) + 26;
+      var left = 78, right = 14, bottom = (lg === 'bottom' ? 26 : 12) + (c.xlabel ? 18 : 0);
+      var p = { x: left, y: top, w: Math.max(60, W - left - right - (lg === 'right' ? 100 : 0)),
+                h: Math.max(40, H - top - bottom), W: W, H: H, top: top };
+      var vals = [];
+      rows.forEach(function (r) { r.values.forEach(function (v) { if (v != null && isFinite(v)) vals.push(v); }); });
+      var lo = vals.length ? Math.min.apply(null, vals) : 0, hi = vals.length ? Math.max.apply(null, vals) : 1;
+      if (hi <= lo) hi = lo + 1;
+      var cw = p.w / nCols, ch = p.h / rows.length;
+      var out = '';
+      c.cols.forEach(function (s, i) {
+        out += T(s, p.x + (i + 0.5) * cw, p.y - 8, 'cht-lab', ' text-anchor="middle"');
+      });
+      rows.forEach(function (r, ri) {
+        out += T(r.name, p.x - 10, p.y + (ri + 0.5) * ch + 4, 'cht-lab', ' text-anchor="end"');
+        for (var ci = 0; ci < nCols; ci++) {
+          var v = r.values[ci];
+          var t = v == null ? 0 : 0.12 + 0.83 * (v - lo) / (hi - lo);
+          var fill = v == null ? 'var(--line,#e6e2da)'
+            : 'rgba(var(--accent-rgb,194,65,12),' + n(t) + ')';
+          out += '<rect class="cht-cell cht-hover" x="' + n(p.x + ci * cw) + '" y="' + n(p.y + ri * ch) +
+            '" width="' + n(cw) + '" height="' + n(ch) + '"' + attrStyle({ fill: fill }) + '>' +
+            tip(r.name + ' · ' + (c.cols[ci] || '') + '：' + (v == null ? '—' : fmtVal(v))) + '</rect>';
+          if (o.datalabels && v != null && cw > 28 && ch > 18) {
+            out += T(fmtVal(v), p.x + (ci + 0.5) * cw, p.y + (ri + 0.5) * ch + 4,
+              'cht-val', ' text-anchor="middle"' +
+              (t > 0.62 ? ' style="fill:var(--bg,#fff)"' : ''));
+          }
+        }
+      });
+      if (c.xlabel) out += T(c.xlabel, p.x + p.w / 2, p.H - 7, 'cht-lab', ' text-anchor="middle"');
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 8. 漏斗图 ---------------- */
+    function renderFunnel(c) {
+      var o = c.opts, W = o.w, H = o.h, items = c.items;
+      if (!items.length) return svgDoc(c, '');
+      var top = 12 + (c.title ? 22 : 0) + (c.subtitle ? 17 : 0) + (o.legend === 'top' ? 26 : 0);
+      var bottom = (o.legend === 'bottom' ? 26 : 0) + 14;
+      var p = { x: 14, y: top, w: W - 28 - (o.legend === 'right' ? 100 : 0), h: H - top - bottom,
+                W: W, H: H, top: top };
+      var mx = Math.max.apply(null, items.map(function (it) { return Math.abs(it.value); })) || 1;
+      var layerH = p.h / items.length, cx = p.x + p.w / 2;
+      var out = '';
+      var widthOf = function (v) { return Math.max(8, p.w * 0.82 * Math.abs(v) / mx); };
+      items.forEach(function (it, i) {
+        var wTop = widthOf(it.value);
+        var wBot = i < items.length - 1 ? widthOf(items[i + 1].value) : wTop * 0.86;
+        var y0 = p.y + i * layerH + 2, y1 = p.y + (i + 1) * layerH - 2;
+        var fill = col(i, it.color);
+        out += '<path class="cht-slice cht-hover" d="M' + n(cx - wTop / 2) + ',' + n(y0) +
+          ' L' + n(cx + wTop / 2) + ',' + n(y0) + ' L' + n(cx + wBot / 2) + ',' + n(y1) +
+          ' L' + n(cx - wBot / 2) + ',' + n(y1) + ' Z"' +
+          attrStyle({ fill: fill, opacity: o.opacity }) + '>' +
+          tip(it.name + '：' + fmtVal(it.value) +
+              (i > 0 && items[0].value ? '（相对首层 ' + (it.value / items[0].value * 100).toFixed(1) + '%）' : '')) + '</path>';
+        var lbl = it.name + '  ' + fmtVal(it.value);
+        var needW = lbl.length * 8.5 + 18;
+        if (Math.min(wTop, wBot) >= needW && y1 - y0 > 16) {
+          out += T(lbl, cx, (y0 + y1) / 2 + 4, 'cht-val',
+            ' text-anchor="middle" style="fill:var(--bg,#fff)"');
+        } else {
+          // 窄层放不下文字时移到外侧，避免挤压重叠
+          out += T(lbl, cx - Math.max(wTop, wBot) / 2 - 10, (y0 + y1) / 2 + 4,
+            'cht-lab', ' text-anchor="end"');
+        }
+        if (i > 0 && items[i - 1].value) {
+          var rate = (it.value / items[i - 1].value * 100).toFixed(1).replace(/\.0$/, '') + '%';
+          out += T('↓ ' + rate, p.x + p.w - 4, y0 + 12, 'cht-sub', ' text-anchor="end"');
+        }
+      });
+      out += legendSvg(c, itemEntries(c), p);
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 9. 箱线图 ---------------- */
+    function quantile(sorted, q) {
+      var pos = (sorted.length - 1) * q, base = Math.floor(pos), rest = pos - base;
+      return sorted[base + 1] != null ? sorted[base] + rest * (sorted[base + 1] - sorted[base]) : sorted[base];
+    }
+    function renderBoxplot(c) {
+      var o = c.opts, groups = c.series;
+      if (!groups.length) return svgDoc(c, '');
+      var stats = groups.map(function (g) {
+        var a = g.values.filter(function (v) { return v != null && isFinite(v); }).sort(function (x, y) { return x - y; });
+        if (!a.length) return null;
+        var q1 = quantile(a, 0.25), med = quantile(a, 0.5), q3 = quantile(a, 0.75), iqr = q3 - q1;
+        var loF = q1 - 1.5 * iqr, hiF = q3 + 1.5 * iqr;
+        var inside = a.filter(function (v) { return v >= loF && v <= hiF; });
+        return { name: g.name, q1: q1, med: med, q3: q3,
+          low: inside.length ? inside[0] : a[0], high: inside.length ? inside[inside.length - 1] : a[a.length - 1],
+          outliers: a.filter(function (v) { return v < loF || v > hiF; }) };
+      }).filter(Boolean);
+      if (!stats.length) return svgDoc(c, '');
+      var lo = Infinity, hi = -Infinity;
+      stats.forEach(function (s) {
+        lo = Math.min(lo, s.low, s.q1); hi = Math.max(hi, s.high, s.q3);
+        s.outliers.forEach(function (v) { lo = Math.min(lo, v); hi = Math.max(hi, v); });
+      });
+      var tk = valueRange(c, lo, hi);
+      var p = layout(c, true, true, false);
+      var sy = function (v) { return p.y + p.h - (v - tk.min) / (tk.max - tk.min) * p.h; };
+      var out = drawGridY(c, p, tk, sy) + drawAxisY(c, p, tk, sy);
+      out += '<line class="cht-axis" x1="' + n(p.x) + '" y1="' + n(p.y + p.h) +
+        '" x2="' + n(p.x + p.w) + '" y2="' + n(p.y + p.h) + '"/>';
+      var slot = p.w / stats.length;
+      stats.forEach(function (s, i) {
+        var cx = p.x + (i + 0.5) * slot, bw = Math.min(56, slot * 0.44), fill = col(i);
+        out += '<line class="cht-outline" x1="' + n(cx) + '" y1="' + n(sy(s.low)) +
+          '" x2="' + n(cx) + '" y2="' + n(sy(s.high)) + '"' + attrStyle({ stroke: fill }) + '/>';
+        out += '<line x1="' + n(cx - bw / 4) + '" y1="' + n(sy(s.low)) + '" x2="' + n(cx + bw / 4) +
+          '" y2="' + n(sy(s.low)) + '"' + attrStyle({ stroke: fill, 'stroke-width': 1.6 }) + '/>';
+        out += '<line x1="' + n(cx - bw / 4) + '" y1="' + n(sy(s.high)) + '" x2="' + n(cx + bw / 4) +
+          '" y2="' + n(sy(s.high)) + '"' + attrStyle({ stroke: fill, 'stroke-width': 1.6 }) + '/>';
+        out += '<rect class="cht-hover" x="' + n(cx - bw / 2) + '" y="' + n(sy(s.q3)) +
+          '" width="' + n(bw) + '" height="' + n(Math.max(1, sy(s.q1) - sy(s.q3))) + '" rx="2"' +
+          attrStyle({ fill: fill, 'fill-opacity': 0.32, stroke: fill, 'stroke-width': 1.6 }) + '>' +
+          tip(s.name + '：Q1 ' + fmtVal(s.q1) + ' / 中位数 ' + fmtVal(s.med) + ' / Q3 ' + fmtVal(s.q3)) + '</rect>';
+        out += '<line x1="' + n(cx - bw / 2) + '" y1="' + n(sy(s.med)) + '" x2="' + n(cx + bw / 2) +
+          '" y2="' + n(sy(s.med)) + '"' + attrStyle({ stroke: fill, 'stroke-width': 2.6 }) + '/>';
+        s.outliers.forEach(function (v) {
+          out += '<circle cx="' + n(cx) + '" cy="' + n(sy(v)) + '" r="2.8"' +
+            attrStyle({ fill: fill }) + '>' + tip(s.name + ' 离群值：' + fmtVal(v)) + '</circle>';
+        });
+        if (o.datalabels) out += T(fmtVal(s.med), cx, sy(s.med) - 7, 'cht-val', ' text-anchor="middle"');
+      });
+      out += drawAxisX(c, p, stats.map(function (s) { return s.name; }),
+        function (i) { return p.x + (i + 0.5) * slot; }, needRot(c, p));
+      return svgDoc(c, out);
+    }
+
+    /* ---------------- 主渲染 ---------------- */
+    function renderFigure(lines) {
+      current = null;
+      var c = parseChart(lines);
+      current = c;
+      var svg = '';
+      try {
+        switch (c.type) {
+          case 'bar': svg = renderBar(c); break;
+          case 'line': case 'area': svg = renderLine(c); break;
+          case 'pie': case 'donut': svg = renderPie(c); break;
+          case 'scatter': case 'bubble': svg = renderScatter(c); break;
+          case 'radar': svg = renderRadar(c); break;
+          case 'histogram': svg = renderHistogram(c); break;
+          case 'heatmap': svg = renderHeatmap(c); break;
+          case 'funnel': svg = renderFunnel(c); break;
+          case 'boxplot': svg = renderBoxplot(c); break;
+          default: svg = renderBar(c);
+        }
+      } catch (e) {
+        c.errs.push({ line: 0, msg: '渲染失败：' + (e && e.message ? e.message : e) });
+        svg = svgDoc(c, '');
+      }
+      var out = '<div class="cht-figure">' + svg;
+      if (c.caption) out += '<div class="cht-cap">' + ctx.md.inline(c.caption) + '</div>';
+      if (c.errs.length) {
+        out += '<div class="cht-errbox"><b>⚠ 有 ' + c.errs.length + ' 处需要检查：</b><br>' +
+          c.errs.slice(0, 6).map(function (x) {
+            return (x.line ? '第 ' + x.line + ' 行：' : '') + esc(x.msg);
+          }).join('<br>') + '</div>';
+      }
+      return out + '</div>';
+    }
+
+    /* ---------------- 语法隔离：把 chart 块改写成私有块 ----------------
+     * 代码高亮扩展会抢走所有 ``` 围栏，因此先在 preTransform 阶段把
+     * ```chart / :::chart 换成 %%%chart … %%%endchart，与加载顺序无关。
+     */
+    var RE_OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(chart|charts|stat)\b([^`~]*)$/i;
+    var RE_ANY_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+    var RE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+    var RE_OPEN_CTR = /^\s{0,3}:::chart\b(.*)$/i;
+    var RE_CLOSE_CTR = /^\s{0,3}:::\s*$/;
+
+    ctx.md.preTransform(function (text) {
+      var src = String(text == null ? '' : text).split('\n');
+      var out = [], i = 0;
+      while (i < src.length) {
+        var line = src[i], m = line.match(RE_OPEN_FENCE);
+        if (m) {
+          var ch = m[1].charAt(0), len = m[1].length, j = i + 1;
+          while (j < src.length) {
+            var cm = src[j].match(RE_CLOSE);
+            if (cm && cm[1].charAt(0) === ch && cm[1].length >= len) break;
+            j++;
+          }
+          if (j < src.length) {
+            out.push('%%%chart ' + (m[3] || '').trim());
+            for (var k = i + 1; k < j; k++) out.push(src[k]);
+            out.push('%%%endchart');
+            i = j + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        var mc = line.match(RE_OPEN_CTR);
+        if (mc) {
+          var j2 = i + 1;
+          while (j2 < src.length && !RE_CLOSE_CTR.test(src[j2])) j2++;
+          if (j2 < src.length) {
+            out.push('%%%chart ' + (mc[1] || '').trim());
+            for (var k2 = i + 1; k2 < j2; k2++) out.push(src[k2]);
+            out.push('%%%endchart');
+            i = j2 + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        // 普通围栏：整段原样跳过，避免示例代码里的 ```chart 被转换
+        var mf = line.match(RE_ANY_FENCE);
+        if (mf) {
+          var ch2 = mf[1].charAt(0), n2 = mf[1].length;
+          out.push(line); i++;
+          while (i < src.length) {
+            out.push(src[i]);
+            var cc = src[i].match(RE_CLOSE);
+            if (cc && cc[1].charAt(0) === ch2 && cc[1].length >= n2) { i++; break; }
+            i++;
+          }
+          continue;
+        }
+        out.push(line); i++;
+      }
+      return out.join('\n');
+    });
+
+    var INFO_SPLIT = /\s+(?=(?:type|chart|size|width|height|title|subtitle|caption|xlabel|ylabel|center|legend|grid|stacked|horizontal|percent|smooth|dots|trend|datalabels|dlabels|showvalues|bins|ticks|levels|hole|gap|opacity|sort|limit|min|max|colors|palette|bar|line|area|pie|donut|scatter|bubble|radar|histogram|heatmap|funnel|boxplot)\b)/i;
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}%%%chart(?:\s|$)/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}%%%endchart\s*$/.test(lines[j])) j++;
+        return j < lines.length ? j - i + 1 : 0;
+      },
+      render: function (lines, i, n) {
+        var head = lines[i].match(/^\s{0,3}%%%chart\s*(.*)$/);
+        var body = [];
+        if (head && head[1]) {
+          var info = head[1].trim();
+          var segs = info.split(INFO_SPLIT);
+          for (var q = 0; q < segs.length; q++) if (segs[q]) body.push(segs[q]);
+        }
+        for (var k = i + 1; k < i + n - 1; k++) body.push(lines[k]);
+        try { return renderFigure(body); }
+        catch (e) {
+          return '<div class="cht-figure"><div class="cht-errbox"><b>⚠ 统计图渲染失败：</b>' +
+                 esc(e && e.message ? e.message : e) + '</div></div>';
+        }
+      }
+    });
+
+    /* ---------------- 工具栏：模板与语法速查 ---------------- */
+    var TPL = {
+      blank: [
+        '# 类型：bar line area pie donut scatter bubble radar histogram heatmap funnel boxplot',
+        '# 数据：labels / series / item / point / row / values / data 表格',
+        'bar',
+        'title 图表标题',
+        'labels 一月 二月 三月 四月',
+        'series 甲 12 18 15 22',
+        'series 乙 9 14 17 20'
+      ].join(NL),
+      bar: [
+        'bar', 'title 季度营收对比', 'subtitle 单位：万元',
+        'xlabel 季度', 'ylabel 营收',
+        'labels Q1 Q2 Q3 Q4',
+        'series 2024 120 145 132 178',
+        'series 2025 150 168 155 196',
+        'legend top', 'datalabels on', 'grid on'
+      ].join(NL),
+      stacked: [
+        'bar', 'title 各渠道销售构成', 'stacked on', 'datalabels on',
+        'labels 北京 上海 广州 深圳',
+        'series 线上 32 45 28 39',
+        'series 门店 24 30 22 27',
+        'series 分销 12 18 15 20'
+      ].join(NL),
+      percentbar: [
+        'bar', 'title 满意度占比', 'stacked on', 'percent on', 'horizontal on',
+        'labels 产品A 产品B 产品C',
+        'series 满意 62 48 71',
+        'series 一般 25 33 20',
+        'series 不满意 13 19 9'
+      ].join(NL),
+      line: [
+        'line', 'title 月度活跃用户', 'ylabel 万人', 'smooth on', 'dots on',
+        'labels 1月 2月 3月 4月 5月 6月 7月 8月',
+        'series iOS 32 35 38 42 45 51 55 60',
+        'series Android 48 50 49 55 58 62 66 71'
+      ].join(NL),
+      area: [
+        'area', 'title 流量来源趋势', 'smooth on', 'ylabel 万人次',
+        'labels 周一 周二 周三 周四 周五 周六 周日',
+        'series 直接访问 20 24 22 28 34 42 38',
+        'series 搜索引擎 14 16 19 21 25 30 28'
+      ].join(NL),
+      pie: [
+        'pie', 'title 市场份额', 'sort desc',
+        'item 苹果 35', 'item 三星 25', 'item 小米 18',
+        'item OPPO 12', 'item 其他 10'
+      ].join(NL),
+      donut: [
+        'donut', 'title 预算分配', 'hole 0.62', 'center 2026 预算',
+        'item 研发 42', 'item 市场 26', 'item 运营 18', 'item 行政 14'
+      ].join(NL),
+      scatter: [
+        'scatter', 'title 身高与体重', 'xlabel 身高 cm', 'ylabel 体重 kg', 'trend on',
+        'point 160 52', 'point 165 56', 'point 170 60', 'point 172 63',
+        'point 175 66', 'point 178 70', 'point 180 72', 'point 183 78', 'point 186 80'
+      ].join(NL),
+      bubble: [
+        'bubble', 'title 城市指标：人口 / 收入 / 规模', 'xlabel 人均收入', 'ylabel 满意度',
+        'point 3.2 72 120', 'point 4.5 78 300', 'point 5.1 81 180',
+        'point 6.3 86 420', 'point 7.2 89 260', 'point 8.0 91 350'
+      ].join(NL),
+      radar: [
+        'radar', 'title 能力雷达', 'levels 4',
+        'labels 速度 力量 耐力 技巧 协作 心态',
+        'series 甲队 82 70 88 65 76 90',
+        'series 乙队 74 88 70 84 82 72'
+      ].join(NL),
+      histogram: [
+        'histogram', 'title 成绩分布', 'xlabel 分数', 'bins 8', 'datalabels on',
+        'values 56 62 65 68 70 71 72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 88 90 92 95'
+      ].join(NL),
+      heatmap: [
+        'heatmap', 'title 一周活跃热力', 'cols 周一 周二 周三 周四 周五 周六 周日',
+        'row 0-6点 12 10 9 11 14 28 30',
+        'row 6-12点 68 72 75 70 78 95 92',
+        'row 12-18点 82 88 90 86 95 110 105',
+        'row 18-24点 55 60 66 72 88 120 108',
+        'datalabels on'
+      ].join(NL),
+      funnel: [
+        'funnel', 'title 转化漏斗',
+        'item 访问 10000', 'item 注册 4200', 'item 加购 2100',
+        'item 下单 980', 'item 支付 760'
+      ].join(NL),
+      boxplot: [
+        'boxplot', 'title 各班成绩分布', 'ylabel 分数',
+        'series 一班 62 68 72 75 78 82 85 88 91 96',
+        'series 二班 55 63 69 73 77 80 84 87 90 98',
+        'series 三班 58 66 71 76 79 83 86 89 93 95'
+      ].join(NL),
+      csv: [
+        'bar', 'title 从 CSV 表格直接出图', 'legend top',
+        'data',
+        '季度,2024,2025',
+        'Q1,120,150',
+        'Q2,145,168',
+        'Q3,132,155',
+        'Q4,178,196'
+      ].join(NL)
+    };
+    var LABELS = {
+      blank: '空白骨架', bar: '分组柱状图', stacked: '堆叠柱状图', percentbar: '百分比条形图',
+      line: '平滑折线图', area: '面积图', pie: '饼图', donut: '环形图',
+      scatter: '散点 + 趋势线', bubble: '气泡图', radar: '雷达图', histogram: '直方图',
+      heatmap: '热力图', funnel: '漏斗图', boxplot: '箱线图', csv: 'CSV 表格数据'
+    };
+    var HELP = [
+      '写法   ```chart bar … ```  或  :::chart … :::；首行可写类型与多个设置',
+      '类型   bar line area pie donut scatter bubble radar histogram heatmap funnel boxplot',
+      '设置   size 620x350 | width | height | title 标题 | subtitle 副标题 | caption 图注',
+      '       xlabel / ylabel 轴名 | center 环图中心字 | legend on|off|top|bottom|right',
+      '       grid on|off | datalabels on|off（在图上写数值）| ticks 5 | colors #f00,#08f',
+      '柱状   stacked on | percent on | horizontal on | gap 0.22 | min / max 指定范围',
+      '折线   smooth on | dots on | stacked on（面积自动填充）',
+      '饼图   sort asc|desc | limit 5（其余并入「其他」）| hole 0.58 | center 文字',
+      '散点   trend on（最小二乘趋势线）| bubble 用第三维控制气泡大小',
+      '雷达   levels 4（网格圈数）| max 指定各维度上限',
+      '其他   bins 8（直方图）| sort/limit（漏斗保持输入顺序）',
+      '数据   labels 一月 二月 三月      # 逗号或空格分隔，可加引号含空格',
+      '       series "线上销售" 12 18 15 22   # 可写 null / - 表示缺失',
+      '       item 苹果 35               # 饼图 / 环图 / 漏斗图',
+      '       point 160 52 [r] [名称]    # 散点 / 气泡图',
+      '       cols 周一 周二 …  +  row 早班 12 18 …   # 热力图',
+      '       values 56 62 65 …         # 直方图 / 箱线图原始数据',
+      '       data 开始 CSV 表格，首行为表头（类别列 + 系列名），到块尾或 end 结束',
+      '注     数值支持负数、小数、1.2k / 3万 / 12%；# 或 // 开头为注释',
+      '       任意图都可用 markdown 写 caption，如 caption 数据来源：2026 年报'
+    ].join(NL);
+
+    function insertTpl(h, key) {
+      var tpl = TPL[key];
+      if (!tpl) return;
+      h.insertText(NL + NL + '```chart' + NL + tpl + NL + '```' + NL + NL);
+      ctx.app.toast('已插入「' + LABELS[key] + '」');
+    }
+    function pickerHtml() {
+      var keys = Object.keys(TPL);
+      var btns = keys.map(function (k) {
+        return '<button class="btn ghost small" data-cht="' + k + '">' + LABELS[k] + '</button>';
+      }).join('');
+      return '<div class="cht-picker">' +
+        '<div class="cht-sec">插入示例（' + keys.length + ' 种）</div><div class="cht-grid2">' + btns + '</div>' +
+        '<div class="cht-sec">语法速查</div><pre class="cht-help">' + esc(HELP) + '</pre>' +
+        '</div>';
+    }
+    ctx.ui.addButton({
+      id: 'chart',
+      icon: '📊',
+      title: '统计图（模板 / 语法速查）',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '统计图');
+        body.onclick = function (ev) {
+          if (!ev.target || !ev.target.closest) return;
+          var b = ev.target.closest('[data-cht]');
+          if (!b) return;
+          insertTpl(h, b.getAttribute('data-cht'));
+          var mask = document.getElementById('extCustomMask');
+          if (mask) mask.classList.remove('show');
+        };
+      }
+    });
+    ctx.ui.addCommand({
+      id: 'chart-blank', key: 'c', ctrl: true, alt: true,
+      onClick: function (h) { insertTpl(h, 'blank'); }
+    });
+  },
+
+  /* 停用 / 移除时清理注入的样式 */
+  dispose: function () {
+    var s = document.getElementById('cht-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});
