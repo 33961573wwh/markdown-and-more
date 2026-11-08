@@ -1,4 +1,4 @@
-# A Boat · 功能介绍与扩展选型指南
+<img width="513" height="567" alt="image" src="https://github.com/user-attachments/assets/4eefcd07-1dca-4863-b342-a57a19bd0be0" /># A Boat · 功能介绍与扩展选型指南
 
 ## UPD:
 
@@ -21,6 +21,10 @@
 #### 扩展
 
 - 增加了图表扩展
+
+#### 更新
+
+- tuack表格外观改变至 `ext-luogu-261108.mext`
 
 > **A Boat · 一苇杭之。** 一个塞进单个 HTML 文件的离线 Markdown 编辑器：不装软件、不连网络、不上传一个字。名字取自《诗经》「谁谓河广，一苇杭之」—— 一片苇叶就能渡河，一个文件就能写完。
 
