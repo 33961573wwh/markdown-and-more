@@ -46,10 +46,21 @@ api.register({
       '.preview .lg-epigraph{margin:1.15em 0;padding:.15em 1em;border-left:3px solid var(--line-strong);color:var(--text-soft);font-style:italic}',
       '.preview .lg-epigraph>:last-child{margin-bottom:0}',
       '.preview .lg-epi-author{display:block;margin-top:.45em;font-style:normal;color:var(--muted);font-size:.92em;text-align:right}',
-      '.preview .lg-cute{margin:1.15em 0;overflow:hidden;border:1px solid var(--line);border-radius:12px;background:var(--panel)}',
-      '.preview .lg-cute .lg-table{margin:0;border-collapse:collapse;width:100%;display:table}',
-      '.preview .lg-cute .lg-table th,.preview .lg-cute .lg-table td{border:1px solid var(--line);padding:.5em .8em}',
-      '.preview .lg-cute .lg-table thead th{text-align:center;background:color-mix(in srgb,var(--accent) 14%,var(--panel-2));color:var(--text)}',
+      /* Tuack 表：洛谷题面数据范围表的书版样式（粗顶底线 / 表头下中粗线 /
+         行间细线 / 列间竖线贯穿 / 全部居中 / 衬线字 / 无底色无圆角）。
+         选择器不依赖 .preview，导出的 HTML 里同样生效。 */
+      '.lg-cute{margin:1.45em 0;overflow-x:auto;background:transparent}',
+      '.lg-cute .lg-table{display:table;border-collapse:collapse;width:auto;min-width:min(100%,30em);max-width:100%;',
+      '  margin:0 auto;font-size:1.02em;color:var(--text,#221f1b);',
+      '  font-family:Georgia,"Times New Roman","Songti SC","STSong","SimSun",serif;',
+      '  border-top:3px solid var(--text,#221f1b);border-bottom:3px solid var(--text,#221f1b)}',
+      '.lg-cute .lg-table th,.lg-cute .lg-table td{',
+      '  border:0;border-left:1px solid var(--muted,#8d8880);',
+      '  padding:.62em 1.15em;text-align:center;vertical-align:middle;white-space:nowrap;',
+      '  background:transparent;color:var(--text,#221f1b);font-weight:400}',
+      '.lg-cute .lg-table th:first-child,.lg-cute .lg-table td:first-child{border-left:0}',
+      '.lg-cute .lg-table thead th{border-bottom:2px solid var(--text,#221f1b)}',
+      '.lg-cute .lg-table tbody tr+tr td{border-top:1px solid var(--muted,#8d8880)}',
       '.preview .lg-table td[rowspan],.preview .lg-table td[colspan]{vertical-align:middle}',
       '.preview .lg-code{counter-reset:lgline}',
       '.preview .lg-code .lg-line{display:block;position:relative;padding-left:3.2em;min-height:1.55em}',
@@ -126,7 +137,8 @@ api.register({
     }
 
     /* ---------------- 带合并单元格的表格 ---------------- */
-    function renderTable(head, aligns, body) {
+    function renderTable(head, aligns, body, opts) {
+      var centerAll = !!(opts && opts.centerAll);   // Tuack 表固定全部居中
       var cols = head.length;
       body.forEach(function (r) { if (r.length > cols) cols = r.length; });
       var heads = head.slice();
@@ -134,7 +146,7 @@ api.register({
 
       var out = '<table class="lg-table"><thead><tr>';
       heads.forEach(function (c, k) {
-        out += '<th' + (aligns[k] ? ' style="text-align:' + aligns[k] + '"' : '') + '>' +
+        out += '<th' + (aligns[k] && !centerAll ? ' style="text-align:' + aligns[k] + '"' : '') + '>' +
           ctx.md.inline(c) + '</th>';
       });
       out += '</tr></thead><tbody>';
@@ -174,7 +186,7 @@ api.register({
           var s = it.span, attr = '';
           if (s.rowspan > 1) attr += ' rowspan="' + s.rowspan + '"';
           if (s.colspan > 1) attr += ' colspan="' + s.colspan + '"';
-          if (aligns[it.col]) attr += ' style="text-align:' + aligns[it.col] + '"';
+          if (aligns[it.col] && !centerAll) attr += ' style="text-align:' + aligns[it.col] + '"';
           out += '<td' + attr + '>' + ctx.md.inline(it.content) + '</td>';
         });
         out += '</tr>';
@@ -255,7 +267,7 @@ api.register({
         var t = readTable(lines, j);
         if (!t) return '';
         return '<div class="lg-cute lg-cute-' + esc(variant) + '">' +
-          renderTable(t.head, t.aligns, t.body) + '</div>';
+          renderTable(t.head, t.aligns, t.body, { centerAll: true }) + '</div>';
       }
     });
 
@@ -330,7 +342,13 @@ api.register({
       'align-center': ':::align{center}\n' + C + '居中的内容\n:::',
       'align-right':  ':::align{right}\n' + C + '居右的内容\n:::',
       'epigraph':     ':::epigraph[——otto]\n' + C + '引言内容\n:::',
-      'cute-table':   '::cute-table{tuack}\n\n| 列 1 | 列 2 | 列 3 |\n| :-: | :-: | :-: |\n| 内容 | 内容 | 内容 |\n',
+      'cute-table':   '::cute-table{tuack}\n\n' +
+                      '| 测试点编号 | n ≤ | m ≤ | 特殊性质 |\n' +
+                      '| :-: | :-: | :-: | :-: |\n' +
+                      '| 1 ∼ 3 | 5 | 2 | 无 |\n' +
+                      '| 4 ∼ 6 | 500 | 200 | 无 |\n' +
+                      '| 7 ∼ 9 | 2 × 10⁵ | 3000 | A |\n' +
+                      '| 10 ∼ 12 | 2 × 10⁵ | 3 × 10⁵ | 无 |\n',
       'code-lineno':  '```cpp line-numbers\n' + C + '// 代码\n```',
       'code-range':   '```cpp line-numbers lines=2-3\n' + C + '// 代码\n```',
       'table-merge':  '| 标题 1 | 标题 2 | 标题 3 |\n| :-: | :-: | :-: |\n| 1 | 跨行合并 | 无 |\n| 2 | ^ | 无 |\n| 跨列合并 | < | 无 |\n',
