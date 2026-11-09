@@ -31,6 +31,8 @@
 #### 调整
 
 - 将 `ext-luogu-261108.mext` 放置至 `ext-luogu.mext`
+  
+- 调整 `README` 结构
 
 > **A Boat · 一苇杭之。** 一个塞进单个 HTML 文件的离线 Markdown 编辑器：不装软件、不连网络、不上传一个字。名字取自《诗经》「谁谓河广，一苇杭之」—— 一片苇叶就能渡河，一个文件就能写完。
 
@@ -185,6 +187,7 @@ api.register({
 | `ext-syntax-highlight.mext` | 30+ 语言代码高亮，明暗自适应，导出保留颜色                                    | 程序员 / 文档       |
 | `ext-admonition.mext`       | `:::tip` 等容器块，需要时会让位给洛谷 `:::info`                          | 学生 / 团队规范      |
 | `ext-emoji.mext`            | `:smile:` 短码转表情 + 插入按钮                                     | 轻笔记 / 活泼排版     |
+| `ext-chart.mext`            | 根据数据绘制统计图    | 学生 / 业余数据分析 |
 
 ---
 
