@@ -1,0 +1,1015 @@
+/* =========================================================
+ * 流程图扩展  (ext-flowchart.mext)
+ * ---------------------------------------------------------
+ * 兼容 Mermaid 的 flowchart / graph 语法，零依赖输出内联 SVG。
+ *
+ *   ```mermaid
+ *   flowchart TD
+ *     A([开始]) --> B[输入数据]
+ *     B --> C{数据合法?}
+ *     C -->|是| D[处理]
+ *     C -->|否| E[报错]
+ *     D --> F([结束])
+ *     E --> B
+ *   ```
+ *
+ * 也认 ```flowchart / ```graph / ```flow 围栏，以及 :::flowchart 容器。
+ * 从 Mermaid 文档、Typora、GitHub 复制的流程图可直接粘贴使用。
+ *
+ * 支持：
+ *   方向  TD / TB / BT / LR / RL、direction 指令
+ *   节点  A[矩形] A(圆角) A((圆)) A{菱形} A[[子程序]] A[(圆柱)]
+ *         A([体育场]) A{{六边形}} A>旗帜] A[/平行四边形/]
+ *   连线  --> --- -->|标签| -- 标签 --> -.-> -.- ==> === <--> --o --x
+ *         链式 A --> B --> C、多目标 A --> B & C、A & B --> C
+ *   分组  subgraph 标题 … end（可嵌套）
+ *   样式  classDef / class / A:::类名 / style、click / linkStyle 安全忽略
+ *   其他  %% 注释、title / caption、自动分层布局、逐行错误提示
+ *   输出  纯内联 SVG，明暗主题自适应，导出 HTML 不丢图
+ * 与「代码高亮」「几何作图」「统计图」等扩展互不冲突。
+ * ========================================================= */
+api.register({
+  name: '流程图',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '兼容 Mermaid 的 flowchart / graph 代码块，零依赖渲染成 SVG 流程图',
+  icon: '🔀',
+
+  init: function (ctx) {
+
+    /* ---------------- 样式（id 以 -ext-style 结尾，导出时会被收集） ---------------- */
+    var STYLE_ID = 'flw-ext-style';
+    var CSS = [
+      '.flw-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden}',
+      '.flw-figure svg{display:block;width:100%;height:auto;margin:0 auto}',
+      '.flw-bg{fill:var(--panel,#fff)}',
+      '.flw-node{fill:var(--panel-2,#faf9f6);stroke:var(--line-strong,#d8d3c8);stroke-width:1.4}',
+      '.flw-node-accent{fill:var(--accent-soft,#fdf1e9);stroke:var(--accent,#c2410c)}',
+      '.flw-node-t{fill:var(--text,#221f1b);font:12.5px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}',
+      '.flw-edge{fill:none;stroke:var(--line-strong,#d8d3c8);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}',
+      '.flw-arrow{fill:var(--line-strong,#d8d3c8);stroke:none}',
+      '.flw-elabel-bg{fill:var(--panel,#fff)}',
+      '.flw-elabel{fill:var(--text-soft,#4a453f);font:11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}',
+      '.flw-sub{fill:none;stroke:var(--line,#e6e2da);stroke-width:1.2;stroke-dasharray:5 4}',
+      '.flw-sub-t{fill:var(--muted,#8d8880);font:600 11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}',
+      '.flw-cap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}',
+      '.flw-cap p{margin:0}',
+      '.flw-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}',
+      '.flw-errbox b{font-weight:650}',
+      '.flw-errbox code{font-family:var(--font-mono,Consolas,monospace)}',
+      '.flw-picker{display:flex;flex-direction:column;gap:.8em;max-height:62vh;overflow:auto;padding-right:4px}',
+      '.flw-picker .flw-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}',
+      '.flw-picker .flw-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4rem}',
+      '.flw-picker .flw-grid2 button{justify-content:flex-start;text-align:left}',
+      '.flw-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}'
+    ].join('\n');
+
+    function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID;
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    ensureStyle();
+
+    /* ---------------- 基础工具 ---------------- */
+    var NL = String.fromCharCode(10);
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function n(v) {
+      var x = Number(v);
+      if (!isFinite(x)) x = 0;
+      return String(Math.round(x * 100) / 100);
+    }
+    function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+    function safeColor(s) {
+      s = String(s == null ? '' : s).trim();
+      if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+      if (/^rgba?\(\s*[0-9.,%\s]+\)$/.test(s)) return s;
+      if (/^var\(--[A-Za-z0-9-]+\)$/.test(s)) return s;
+      if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(s)) return s;
+      return '';
+    }
+
+    /* 以「半角单位」估算文字宽度：中文/全角算 2，其余算 1 */
+    function chUnits(c) {
+      return /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/.test(c) ? 2 : 1;
+    }
+    function lineUnits(s) {
+      var u = 0;
+      for (var i = 0; i < s.length; i++) u += chUnits(s.charAt(i));
+      return u;
+    }
+    function wrapText(s, maxU) {
+      s = String(s == null ? '' : s)
+        .replace(/<br\s*\/?>/gi, '\n').replace(/\\n/g, '\n');
+      var paras = s.split('\n'), lines = [];
+      for (var p = 0; p < paras.length && lines.length < 6; p++) {
+        var str = paras[p].trim(), cur = '', u = 0;
+        for (var i = 0; i < str.length; i++) {
+          var c = str.charAt(i), cu = chUnits(c);
+          if (u + cu > maxU && cur) { lines.push(cur); cur = ''; u = 0; }
+          cur += c; u += cu;
+        }
+        lines.push(cur || ' ');
+      }
+      return lines.length ? lines.slice(0, 6) : [' '];
+    }
+
+    /* ---------------- 词法：节点形状 ---------------- */
+    var SHAPES = [
+      { o: '((', c: '))', s: 'circle' },
+      { o: '([', c: '])', s: 'stadium' },
+      { o: '[[', c: ']]', s: 'subroutine' },
+      { o: '[(', c: ')]', s: 'cylinder' },
+      { o: '[/', c: '/]', s: 'lean' },
+      { o: '{{', c: '}}', s: 'hex' },
+      { o: '(', c: ')', s: 'round' },
+      { o: '[', c: ']', s: 'rect' },
+      { o: '{', c: '}', s: 'diamond' },
+      { o: '>', c: ']', s: 'asym' }
+    ];
+
+    /* 找到配对右括号，跳过引号里的内容 */
+    function findClose(s, open, close) {
+      var depth = 1, i = open.length, q = null;
+      while (i < s.length) {
+        var c = s.charAt(i);
+        if (q) { if (c === q) q = null; i++; continue; }
+        if (c === '"' || c === "'") { q = c; i++; continue; }
+        if (s.substr(i, close.length) === close) {
+          depth--;
+          if (depth === 0) return i;
+          i += close.length; continue;
+        }
+        if (open.length === 2 && s.substr(i, open.length) === open) { depth++; i += open.length; continue; }
+        if (open.length === 1 && c === open) depth++;
+        i++;
+      }
+      return -1;
+    }
+    function cleanLabel(s) {
+      if (s == null) return '';
+      s = String(s).trim();
+      var m = /^\[\s*([\s\S]*?)\s*\]$/.exec(s);
+      if (m) s = m[1].trim();
+      for (var k = 0; k < 2; k++) {
+        if (s.length >= 2 && ((s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') ||
+                             (s.charAt(0) === "'" && s.charAt(s.length - 1) === "'"))) {
+          s = s.slice(1, -1).trim();
+        }
+      }
+      return s.replace(/\\(["'\\])/g, '$1').replace(/\s+/g, ' ');
+    }
+
+    /* 分号切分语句（括号 / 引号内不切） */
+    function splitStatements(line) {
+      var out = [], cur = '', q = null, depth = 0;
+      for (var i = 0; i < line.length; i++) {
+        var c = line.charAt(i);
+        if (q) { cur += c; if (c === q) q = null; continue; }
+        if (c === '"' || c === "'") { q = c; cur += c; continue; }
+        if (c === '[' || c === '(' || c === '{') { depth++; cur += c; continue; }
+        if (c === ']' || c === ')' || c === '}') { depth = Math.max(0, depth - 1); cur += c; continue; }
+        if (c === ';' && depth === 0) { if (cur.trim()) out.push(cur); cur = ''; continue; }
+        cur += c;
+      }
+      if (cur.trim()) out.push(cur);
+      return out;
+    }
+    function splitProps(str) {
+      var out = [], cur = '', d = 0;
+      for (var i = 0; i < str.length; i++) {
+        var c = str.charAt(i);
+        if (c === '(') d++;
+        if (c === ')') d--;
+        if (c === ',' && d === 0) { if (cur.trim()) out.push(cur); cur = ''; continue; }
+        cur += c;
+      }
+      if (cur.trim()) out.push(cur);
+      return out;
+    }
+    function parseProps(str) {
+      var out = {}, parts = splitProps(String(str || ''));
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i], idx = p.indexOf(':');
+        if (idx < 0) continue;
+        var k = p.slice(0, idx).trim().toLowerCase(), v = p.slice(idx + 1).trim();
+        if (k === 'fill' || k === 'stroke' || k === 'color' || k === 'background') {
+          var c = safeColor(v);
+          if (c) out[k === 'background' ? 'fill' : k] = c;
+        } else if (k === 'stroke-width' || k === 'opacity') {
+          var num = parseFloat(v);
+          if (isFinite(num)) out[k] = clamp(num, 0, 12);
+        } else if (k === 'stroke-dasharray' && /^[0-9.,\s]+$/.test(v)) {
+          out[k] = v;
+        }
+      }
+      return out;
+    }
+    function mergeProps(a, b) { for (var k in b) if (Object.prototype.hasOwnProperty.call(b, k)) a[k] = b[k]; }
+
+    /* ---------------- 语法树 ---------------- */
+    function mkNode(id, label, shape, st) {
+      if (!id) id = '__auto' + (++st.auto);
+      var nd = st.nodes[id];
+      if (!nd) {
+        nd = st.nodes[id] = { id: id, label: id, shape: 'round', cls: '', props: {}, sub: st.curSub, seq: st.seq++ };
+        st.order.push(id);
+      }
+      if (label != null && label !== '') nd.label = label;
+      if (shape) nd.shape = shape;
+      /* 分组只按「首次出现」归属，块外已定义的节点不会被后面的 subgraph 抢走 */
+      return nd;
+    }
+
+    function readNode(src, pos, st) {
+      while (pos < src.length && /\s/.test(src.charAt(pos))) pos++;
+      if (pos >= src.length) return null;
+      var id = '', label = null, shape = null;
+      var m = /^([A-Za-z0-9_\u0080-\uffff]+)/.exec(src.slice(pos));
+      if (m) { id = m[1]; pos += m[1].length; }
+      var rest = src.slice(pos);
+      for (var k = 0; k < SHAPES.length; k++) {
+        var sh = SHAPES[k];
+        if (rest.substr(0, sh.o.length) === sh.o) {
+          var end = findClose(rest, sh.o, sh.c);
+          if (end >= 0) {
+            label = cleanLabel(rest.slice(sh.o.length, end));
+            shape = sh.s;
+            pos += end + sh.c.length;
+            break;
+          }
+        }
+      }
+      if (!id && label == null) return null;
+      var mc = /^:::([A-Za-z0-9_-]+)/.exec(src.slice(pos));
+      var cls = '';
+      if (mc) { cls = mc[1]; pos += mc[0].length; }
+      var nd = mkNode(id, label, shape, st);
+      if (cls) nd.cls = cls;
+      return { node: nd, pos: pos };
+    }
+
+    var EDGE_PATTERNS = [
+      [/^<-->/, 'solid', 'both'],
+      [/^<==>/, 'thick', 'both'],
+      [/^<\.->/, 'dotted', 'both'],
+      [/^-->\s*\|\s*([^|]*?)\s*\|/, 'solid', 'end', 1],
+      [/^--\s*\|\s*([^|]*?)\s*\|\s*-->/, 'solid', 'end', 1],
+      [/^--\s+([^-\n]+?)\s+-->/, 'solid', 'end', 1],
+      [/^--([^-\n=>][^-\n=]*?)-->/, 'solid', 'end', 1],
+      [/^-->/, 'solid', 'end'],
+      [/^---/, 'solid', 'none'],
+      [/^--o/, 'solid', 'end'],
+      [/^--x/, 'solid', 'end'],
+      [/^==>\s*\|\s*([^|]*?)\s*\|/, 'thick', 'end', 1],
+      [/^==\s*\|\s*([^|]*?)\s*\|\s*==>/, 'thick', 'end', 1],
+      [/^==\s+([^=\n]+?)\s+==>/, 'thick', 'end', 1],
+      [/^==([^=\n>=][^=\n]*?)==>/, 'thick', 'end', 1],
+      [/^==>/, 'thick', 'end'],
+      [/^===/, 'thick', 'none'],
+      [/^-\.->\s*\|\s*([^|]*?)\s*\|/, 'dotted', 'end', 1],
+      [/^-\.\s*\|\s*([^|]*?)\s*\|\s*\.->/, 'dotted', 'end', 1],
+      [/^-\.\s+([^.\n]+?)\s+\.->/, 'dotted', 'end', 1],
+      [/^-\.->/, 'dotted', 'end'],
+      [/^-\.-/, 'dotted', 'none'],
+      [/^~~~\s*/, 'invisible', 'none'],
+      [/^~~>/, 'invisible', 'none']
+    ];
+
+    function readEdge(src, pos) {
+      var t = src.slice(pos);
+      for (var k = 0; k < EDGE_PATTERNS.length; k++) {
+        var p = EDGE_PATTERNS[k], m = p[0].exec(t);
+        if (!m) continue;
+        var np = pos + m[0].length;
+        while (np < src.length && /\s/.test(src.charAt(np))) np++;
+        return { kind: p[1], arrows: p[2], label: p[3] ? cleanLabel(m[p[3]]) : '', pos: np };
+      }
+      return null;
+    }
+
+    function parseChain(line, st, ln) {
+      var pos = 0, pending = null, guard = 0;
+      while (pos < line.length && guard++ < 160) {
+        while (pos < line.length && /\s/.test(line.charAt(pos))) pos++;
+        if (pos >= line.length) break;
+        var ids = [], r;
+        while (true) {
+          r = readNode(line, pos, st);
+          if (!r) break;
+          ids.push(r.node.id); pos = r.pos;
+          while (pos < line.length && /\s/.test(line.charAt(pos))) pos++;
+          if (line.charAt(pos) === '&') { pos++; continue; }
+          break;
+        }
+        if (!ids.length) {
+          var tail = line.slice(pos).trim();
+          if (tail && tail.charAt(0) !== '%') st.errs.push({ line: ln, msg: '无法识别：' + tail.slice(0, 36) });
+          break;
+        }
+        if (pending) {
+          for (var a = 0; a < pending.froms.length; a++) {
+            for (var b = 0; b < ids.length; b++) {
+              st.edges.push({ from: pending.froms[a], to: ids[b], label: pending.label, kind: pending.kind, arrows: pending.arrows });
+            }
+          }
+          pending = null;
+        }
+        var e = readEdge(line, pos);
+        if (e) {
+          pos = e.pos;
+          pending = { froms: ids, label: e.label, kind: e.kind, arrows: e.arrows };
+        } else if (pos < line.length) {
+          var t2 = line.slice(pos).trim();
+          if (t2 && t2.charAt(0) !== '%') st.errs.push({ line: ln, msg: '连线后有多余内容：' + t2.slice(0, 36) });
+          break;
+        }
+      }
+    }
+
+    function parseFigure(body, headInfo) {
+      var st = {
+        nodes: {}, order: [], edges: [], subs: [], errs: [],
+        dir: 'TD', curSub: null, stack: [], auto: 0, seq: 0,
+        title: '', caption: '', classDefs: {}, styleCmds: [], classCmds: []
+      };
+      var hd = String(headInfo || '').trim();
+      var dhd = /\b(TD|TB|BT|LR|RL)\b/i.exec(hd);
+      if (dhd) st.dir = dhd[1].toUpperCase();
+
+      for (var i = 0; i < body.length; i++) {
+        var ln = i + 1;
+        var line = String(body[i] == null ? '' : body[i]).replace(/\t/g, '    ');
+        var trimmed = line.trim();
+        if (!trimmed || /^%%/.test(trimmed)) continue;
+        line = line.replace(/\s+%%.*$/, '');
+        var stmts = splitStatements(line);
+        for (var s = 0; s < stmts.length; s++) {
+          var t = stmts[s].trim();
+          if (!t) continue;
+
+          if (/^(flowchart|graph|flow)\b/i.test(t)) {
+            var dm = /\b(TD|TB|BT|LR|RL)\b/i.exec(t);
+            if (dm && !dhd) st.dir = dm[1].toUpperCase();
+            continue;
+          }
+          if (/^direction\s+(TD|TB|BT|LR|RL)\b/i.test(t)) {
+            if (!st.curSub) st.dir = t.split(/\s+/)[1].toUpperCase();
+            continue;
+          }
+          if (/^subgraph\b/i.test(t)) {
+            var rest = t.replace(/^subgraph\s*/i, '').trim();
+            var sm = /^([A-Za-z0-9_\u0080-\uffff-]+)\s*\[\s*([\s\S]*?)\s*\]$/.exec(rest);
+            var sid, title;
+            if (sm) { sid = sm[1]; title = cleanLabel(sm[2]); }
+            else { sid = 'sub' + (st.subs.length + 1); title = cleanLabel(rest) || ('分组 ' + (st.subs.length + 1)); }
+            st.subs.push({ id: sid, title: title });
+            st.stack.push(sid); st.curSub = sid;
+            continue;
+          }
+          if (/^end$/i.test(t)) {
+            st.stack.pop();
+            st.curSub = st.stack.length ? st.stack[st.stack.length - 1] : null;
+            continue;
+          }
+          if (/^classDef\b/i.test(t)) {
+            var mc = /^classDef\s+([A-Za-z0-9_-]+)\s+(.+)$/i.exec(t);
+            if (mc) st.classDefs[mc[1]] = parseProps(mc[2]);
+            else st.errs.push({ line: ln, msg: 'classDef 写法应为 classDef 名称 fill:#fff,stroke:#333' });
+            continue;
+          }
+          if (/^class\b/i.test(t)) {
+            var mk = /^class\s+(.+?)\s+([A-Za-z0-9_-]+)$/i.exec(t);
+            if (mk) st.classCmds.push({ ids: mk[1].split(','), cls: mk[2] });
+            else st.errs.push({ line: ln, msg: 'class 写法应为 class A,B 类名' });
+            continue;
+          }
+          if (/^style\b/i.test(t)) {
+            var ms = /^style\s+(\S+)\s+(.+)$/i.exec(t);
+            if (ms) st.styleCmds.push({ id: ms[1], props: parseProps(ms[2]) });
+            else st.errs.push({ line: ln, msg: 'style 写法应为 style A fill:#fff' });
+            continue;
+          }
+          if (/^(click|linkStyle)\b/i.test(t)) continue;   // 交互 / 链接样式：安全忽略
+          if (/^title\b/i.test(t)) { st.title = t.replace(/^title\s*/i, '').trim(); continue; }
+          if (/^caption\b/i.test(t)) { st.caption = t.replace(/^caption\s*/i, '').trim(); continue; }
+          parseChain(t, st, ln);
+        }
+      }
+
+      st.classCmds.forEach(function (c) {
+        var def = st.classDefs[c.cls] || {};
+        c.ids.forEach(function (id) {
+          var nd = st.nodes[String(id).trim()];
+          if (nd) mergeProps(nd.props, def);
+        });
+      });
+      st.styleCmds.forEach(function (c) {
+        var nd = st.nodes[c.id];
+        if (nd) mergeProps(nd.props, c.props);
+      });
+      st.order.forEach(function (id) {
+        var nd = st.nodes[id];
+        if (nd.cls && st.classDefs[nd.cls]) mergeProps(nd.props, st.classDefs[nd.cls]);
+      });
+      return st;
+    }
+
+    /* ---------------- 布局 ---------------- */
+    function measure(nd) {
+      nd.lines = wrapText(nd.label, 22);
+      var u = 0;
+      for (var i = 0; i < nd.lines.length; i++) u = Math.max(u, lineUnits(nd.lines[i]));
+      var w = u * 7.1 + 28, h = nd.lines.length * 17 + 16;
+      if (nd.shape === 'circle') { w = Math.max(w + 12, nd.lines.length > 1 ? 88 : 58); h = Math.max(h, w * 0.72); }
+      else if (nd.shape === 'diamond') { w += 34; h += 14; }
+      else if (nd.shape === 'hex') { w += 26; h += 8; }
+      else if (nd.shape === 'stadium') { h = Math.max(h, 38); }
+      else if (nd.shape === 'cylinder') { h += 10; }
+      else if (nd.shape === 'subroutine') { w += 14; }
+      nd.w = clamp(w, 46, 300);
+      nd.h = clamp(h, 36, 160);
+    }
+
+    function layout(g) {
+      var ids = g.order.slice(), rank = {}, i, r;
+      /* 先用 DFS 标出回边（成环的边）：回边不参与分层，否则会把起点推到末尾 */
+      var adj = {}, color = {}, back = {};
+      ids.forEach(function (id) { adj[id] = []; });
+      g.edges.forEach(function (e) {
+        if (g.nodes[e.from] && g.nodes[e.to]) adj[e.from].push(e.to);
+      });
+      function dfs(u) {
+        color[u] = 1;
+        for (var k = 0; k < adj[u].length; k++) {
+          var v = adj[u][k];
+          if (color[v] === 1) back[u + '\u0001' + v] = true;
+          else if (!color[v]) dfs(v);
+        }
+        color[u] = 2;
+      }
+      ids.forEach(function (id) { if (!color[id]) dfs(id); });
+      function isBack(e) { return e.from === e.to || !!back[e.from + '\u0001' + e.to]; }
+
+      for (i = 0; i < ids.length; i++) rank[ids[i]] = 0;
+      for (var pass = 0; pass < ids.length + 2; pass++) {
+        var changed = false;
+        for (i = 0; i < g.edges.length; i++) {
+          var e = g.edges[i];
+          if (!g.nodes[e.from] || !g.nodes[e.to] || isBack(e)) continue;
+          if (rank[e.from] + 1 > rank[e.to] && rank[e.from] < ids.length) {
+            rank[e.to] = rank[e.from] + 1; changed = true;
+          }
+        }
+        if (!changed) break;
+      }
+      var maxR = 0;
+      ids.forEach(function (id) { maxR = Math.max(maxR, rank[id]); });
+      var groups = [];
+      for (r = 0; r <= maxR; r++) groups.push([]);
+      ids.forEach(function (id) { groups[rank[id]].push(id); });
+
+      /* 同一 subgraph 的节点先聚拢 */
+      groups.forEach(function (gr) {
+        gr.sort(function (a, b) {
+          var sa = g.nodes[a].sub || '', sb = g.nodes[b].sub || '';
+          if (sa === sb) return g.nodes[a].seq - g.nodes[b].seq;
+          return sa < sb ? -1 : 1;
+        });
+      });
+      /* 重心法减少交叉 */
+      for (var p2 = 0; p2 < 3; p2++) {
+        for (r = 1; r < groups.length; r++) {
+          var pos = {}, prev = groups[r - 1], bc = {};
+          for (var k = 0; k < prev.length; k++) pos[prev[k]] = k;
+          groups[r].forEach(function (id) {
+            var sum = 0, cnt = 0;
+            g.edges.forEach(function (e) { if (e.to === id && pos[e.from] != null) { sum += pos[e.from]; cnt++; } });
+            bc[id] = cnt ? sum / cnt : g.nodes[id].seq;
+          });
+          groups[r].sort(function (a, b) { return bc[a] - bc[b] || g.nodes[a].seq - g.nodes[b].seq; });
+        }
+      }
+
+      ids.forEach(function (id) { measure(g.nodes[id]); });
+      var vertical = (g.dir === 'TD' || g.dir === 'TB' || g.dir === 'BT');
+      var sign = (g.dir === 'BT' || g.dir === 'RL') ? -1 : 1;
+      var gapRank = vertical ? 52 : 80, gapIn = vertical ? 22 : 18;
+      var acc = 0;
+      groups.forEach(function (gr) {
+        var nd;
+        if (vertical) {
+          var rowH = 0, total = 0;
+          gr.forEach(function (id) { rowH = Math.max(rowH, g.nodes[id].h); total += g.nodes[id].w; });
+          total += gapIn * Math.max(0, gr.length - 1);
+          var x = -total / 2;
+          gr.forEach(function (id) {
+            nd = g.nodes[id];
+            nd.x = x + nd.w / 2; x += nd.w + gapIn;
+            nd.y = (acc + rowH / 2) * sign;
+          });
+          acc += rowH + gapRank;
+        } else {
+          var colW = 0, totalH = 0;
+          gr.forEach(function (id) { colW = Math.max(colW, g.nodes[id].w); totalH += g.nodes[id].h; });
+          totalH += gapIn * Math.max(0, gr.length - 1);
+          var yy = -totalH / 2;
+          gr.forEach(function (id) {
+            nd = g.nodes[id];
+            nd.x = (acc + colW / 2) * sign;
+            nd.y = yy + nd.h / 2; yy += nd.h + gapIn;
+          });
+          acc += colW + gapRank;
+        }
+      });
+      g.vertical = vertical; g.sign = sign;
+    }
+
+    /* ---------------- SVG 绘制 ---------------- */
+    function shapeStyle(p) {
+      var a = [];
+      if (p.fill) a.push('fill:' + p.fill);
+      if (p.stroke) a.push('stroke:' + p.stroke);
+      if (p['stroke-width']) a.push('stroke-width:' + p['stroke-width']);
+      if (p.opacity) a.push('opacity:' + p.opacity);
+      if (p['stroke-dasharray']) a.push('stroke-dasharray:' + p['stroke-dasharray']);
+      return a.length ? ' style="' + a.join(';') + '"' : '';
+    }
+    function textStyle(p) { return p.color ? ' style="fill:' + p.color + '"' : ''; }
+
+    function drawNode(nd) {
+      var x = nd.x, y = nd.y, w = nd.w, h = nd.h;
+      var x1 = x - w / 2, x2 = x + w / 2, y1 = y - h / 2, y2 = y + h / 2;
+      var accent = (nd.shape === 'circle' || nd.shape === 'stadium');
+      var cls = 'flw-node' + (accent ? ' flw-node-accent' : '');
+      var stl = shapeStyle(nd.props);
+      var s = '';
+      switch (nd.shape) {
+        case 'circle':
+          s = '<ellipse class="' + cls + '"' + stl + ' cx="' + n(x) + '" cy="' + n(y) + '" rx="' + n(w / 2) + '" ry="' + n(h / 2) + '"/>';
+          break;
+        case 'diamond':
+          s = '<path class="' + cls + '"' + stl + ' d="M ' + n(x) + ' ' + n(y1) + ' L ' + n(x2) + ' ' + n(y) +
+              ' L ' + n(x) + ' ' + n(y2) + ' L ' + n(x1) + ' ' + n(y) + ' Z"/>';
+          break;
+        case 'hex':
+          s = '<path class="' + cls + '"' + stl + ' d="M ' + n(x1 + 12) + ' ' + n(y1) + ' L ' + n(x2 - 12) + ' ' + n(y1) +
+              ' L ' + n(x2) + ' ' + n(y) + ' L ' + n(x2 - 12) + ' ' + n(y2) + ' L ' + n(x1 + 12) + ' ' + n(y2) +
+              ' L ' + n(x1) + ' ' + n(y) + ' Z"/>';
+          break;
+        case 'lean':
+          s = '<path class="' + cls + '"' + stl + ' d="M ' + n(x1 + 12) + ' ' + n(y1) + ' L ' + n(x2) + ' ' + n(y1) +
+              ' L ' + n(x2 - 12) + ' ' + n(y2) + ' L ' + n(x1) + ' ' + n(y2) + ' Z"/>';
+          break;
+        case 'cylinder':
+          s = '<path class="' + cls + '"' + stl + ' d="M ' + n(x1) + ' ' + n(y1 + 7) +
+              ' C ' + n(x1) + ' ' + n(y1 - 3) + ', ' + n(x2) + ' ' + n(y1 - 3) + ', ' + n(x2) + ' ' + n(y1 + 7) +
+              ' L ' + n(x2) + ' ' + n(y2 - 6) +
+              ' C ' + n(x2) + ' ' + n(y2 + 4) + ', ' + n(x1) + ' ' + n(y2 + 4) + ', ' + n(x1) + ' ' + n(y2 - 6) + ' Z"/>';
+          break;
+        case 'subroutine':
+          s = '<rect class="' + cls + '"' + stl + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="4"/>' +
+              '<path class="flw-node" fill="none" d="M ' + n(x1 + 9) + ' ' + n(y1 + 3) + ' V ' + n(y2 - 3) +
+              ' M ' + n(x2 - 9) + ' ' + n(y1 + 3) + ' V ' + n(y2 - 3) + '"/>';
+          break;
+        case 'stadium':
+          s = '<rect class="' + cls + '"' + stl + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="' + n(h / 2) + '"/>';
+          break;
+        case 'rect': case 'asym':
+          s = '<rect class="' + cls + '"' + stl + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="3"/>';
+          break;
+        default:
+          s = '<rect class="' + cls + '"' + stl + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="9"/>';
+      }
+      var lh = 17, y0 = y - (nd.lines.length - 1) * lh / 2 + 4.5;
+      var t = '<text class="flw-node-t"' + textStyle(nd.props) + ' x="' + n(x) + '" y="' + n(y0) + '" text-anchor="middle">';
+      for (var i = 0; i < nd.lines.length; i++) {
+        t += '<tspan x="' + n(x) + '"' + (i ? ' dy="' + lh + '"' : '') + '>' + esc(nd.lines[i]) + '</tspan>';
+      }
+      return s + t + '</text>';
+    }
+
+    function routeEdge(e, a, b, g) {
+      var vertical = g.vertical, sign = g.sign;
+      var sx, sy, tx, ty, ux, uy, sux, suy, d, mx, my;
+      if (a === b) {
+        sx = a.x + a.w / 2; sy = a.y; tx = a.x; ty = a.y - a.h / 2;
+        d = 'M ' + n(sx) + ' ' + n(sy) + ' C ' + n(sx + 36) + ' ' + n(sy - 44) + ', ' +
+            n(tx - 36) + ' ' + n(ty - 18) + ', ' + n(tx) + ' ' + n(ty);
+        ux = 0; uy = -1; sux = 0; suy = 1; mx = sx + 26; my = sy - 30;
+      } else if (vertical) {
+        if ((b.y - a.y) * sign > 4) {
+          sx = a.x; sy = a.y + sign * a.h / 2;
+          tx = b.x; ty = b.y - sign * b.h / 2;
+          var my2 = (sy + ty) / 2;
+          d = 'M ' + n(sx) + ' ' + n(sy) + ' C ' + n(sx) + ' ' + n(my2) + ', ' +
+              n(tx) + ' ' + n(my2) + ', ' + n(tx) + ' ' + n(ty);
+          ux = 0; uy = sign; sux = 0; suy = sign; mx = (sx + tx) / 2; my = my2;
+        } else {
+          var side = ((a.x + b.x) / 2 >= 0) ? 1 : -1, off = 68 * side;
+          sx = a.x + side * a.w / 2; sy = a.y;
+          tx = b.x + side * b.w / 2; ty = b.y;
+          d = 'M ' + n(sx) + ' ' + n(sy) + ' C ' + n(sx + off) + ' ' + n(sy) + ', ' +
+              n(tx + off) + ' ' + n(ty) + ', ' + n(tx) + ' ' + n(ty);
+          ux = -side; uy = 0; sux = side; suy = 0;
+          mx = (sx + tx + 2 * off) / 2; my = (sy + ty) / 2;
+        }
+      } else {
+        if ((b.x - a.x) * sign > 4) {
+          sx = a.x + sign * a.w / 2; sy = a.y;
+          tx = b.x - sign * b.w / 2; ty = b.y;
+          var mx2 = (sx + tx) / 2;
+          d = 'M ' + n(sx) + ' ' + n(sy) + ' C ' + n(mx2) + ' ' + n(sy) + ', ' +
+              n(mx2) + ' ' + n(ty) + ', ' + n(tx) + ' ' + n(ty);
+          ux = sign; uy = 0; sux = sign; suy = 0; mx = mx2; my = (sy + ty) / 2;
+        } else {
+          var side2 = ((a.y + b.y) / 2 >= 0) ? 1 : -1, off2 = 62 * side2;
+          sx = a.x; sy = a.y + side2 * a.h / 2;
+          tx = b.x; ty = b.y + side2 * b.h / 2;
+          d = 'M ' + n(sx) + ' ' + n(sy) + ' C ' + n(sx) + ' ' + n(sy + off2) + ', ' +
+              n(tx) + ' ' + n(ty + off2) + ', ' + n(tx) + ' ' + n(ty);
+          ux = 0; uy = -side2; sux = 0; suy = side2;
+          mx = (sx + tx) / 2; my = (sy + ty + 2 * off2) / 2;
+        }
+      }
+      return { d: d, ux: ux, uy: uy, sux: sux, suy: suy, sx: sx, sy: sy, tx: tx, ty: ty, mx: mx, my: my };
+    }
+
+    function arrowHead(x, y, ux, uy) {
+      var L = 8.5, W = 3.8, px = -uy, py = ux;
+      var bx = x - ux * L, by = y - uy * L;
+      return '<path class="flw-arrow" d="M ' + n(x) + ' ' + n(y) + ' L ' + n(bx + px * W) + ' ' + n(by + py * W) +
+             ' L ' + n(bx - px * W) + ' ' + n(by - py * W) + ' Z"/>';
+    }
+
+    function renderFigure(lines, headInfo) {
+      var g = parseFigure(lines, headInfo);
+      if (!g.order.length) {
+        return '<div class="flw-figure"><div class="flw-errbox"><b>⚠ 流程图为空：</b>' +
+               '至少写一个节点，例如 <code>A --&gt; B</code></div></div>';
+      }
+      layout(g);
+
+      var routes = [], edgesSvg = '', i;
+      for (i = 0; i < g.edges.length; i++) {
+        var e = g.edges[i], a = g.nodes[e.from], b = g.nodes[e.to];
+        if (!a || !b) continue;
+        var r = routeEdge(e, a, b, g);
+        r.edge = e;
+        routes.push(r);
+      }
+
+      /* 分组框 */
+      var boxes = [];
+      g.subs.forEach(function (sub) {
+        var members = g.order.filter(function (id) { return g.nodes[id].sub === sub.id; });
+        if (!members.length) return;
+        var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+        members.forEach(function (id) {
+          var nd = g.nodes[id];
+          mnx = Math.min(mnx, nd.x - nd.w / 2); mxx = Math.max(mxx, nd.x + nd.w / 2);
+          mny = Math.min(mny, nd.y - nd.h / 2); mxy = Math.max(mxy, nd.y + nd.h / 2);
+        });
+        boxes.push({ x1: mnx - 14, y1: mny - 24, x2: mxx + 14, y2: mxy + 14, title: sub.title });
+      });
+
+      /* 连线（在节点下层） */
+      routes.forEach(function (r) {
+        var e = r.edge;
+        if (e.kind === 'invisible') return;
+        var attrs = '';
+        if (e.kind === 'dotted') attrs += ' stroke-dasharray="5 4"';
+        if (e.kind === 'thick') attrs += ' stroke-width="3.2"';
+        edgesSvg += '<path class="flw-edge" d="' + r.d + '"' + attrs + '/>';
+        if (e.label) {
+          var lbl = wrapText(e.label, 16);
+          var u = 0;
+          lbl.forEach(function (l) { u = Math.max(u, lineUnits(l)); });
+          var lw = u * 6.4 + 12, lh = lbl.length * 14 + 6;
+          edgesSvg += '<rect class="flw-elabel-bg" x="' + n(r.mx - lw / 2) + '" y="' + n(r.my - lh / 2) +
+                      '" width="' + n(lw) + '" height="' + n(lh) + '" rx="4"/>';
+          var ty = r.my - (lbl.length - 1) * 7 + 4;
+          edgesSvg += '<text class="flw-elabel" x="' + n(r.mx) + '" y="' + n(ty) + '" text-anchor="middle">';
+          for (var k = 0; k < lbl.length; k++) {
+            edgesSvg += '<tspan x="' + n(r.mx) + '"' + (k ? ' dy="14"' : '') + '>' + esc(lbl[k]) + '</tspan>';
+          }
+          edgesSvg += '</text>';
+        }
+        if (e.arrows === 'end' || e.arrows === 'both') {
+          edgesSvg += arrowHead(r.tx, r.ty, r.ux, r.uy);
+        }
+        if (e.arrows === 'both') {
+          edgesSvg += arrowHead(r.sx, r.sy, -r.sux, -r.suy);
+        }
+      });
+
+      var boxesSvg = '';
+      boxes.forEach(function (b) {
+        boxesSvg += '<rect class="flw-sub" x="' + n(b.x1) + '" y="' + n(b.y1) +
+                    '" width="' + n(b.x2 - b.x1) + '" height="' + n(b.y2 - b.y1) + '" rx="9"/>' +
+                    '<text class="flw-sub-t" x="' + n(b.x1 + 12) + '" y="' + n(b.y1 + 16) + '">' + esc(b.title) + '</text>';
+      });
+      var nodesSvg = '';
+      g.order.forEach(function (id) { nodesSvg += drawNode(g.nodes[id]); });
+
+      /* 包围盒 */
+      var pts = [];
+      function addPt(x, y) { pts.push([x, y]); }
+      g.order.forEach(function (id) {
+        var nd = g.nodes[id];
+        addPt(nd.x - nd.w / 2 - 4, nd.y - nd.h / 2 - 4);
+        addPt(nd.x + nd.w / 2 + 4, nd.y + nd.h / 2 + 4);
+      });
+      boxes.forEach(function (b) { addPt(b.x1 - 4, b.y1 - 4); addPt(b.x2 + 4, b.y2 + 4); });
+      routes.forEach(function (r) {
+        addPt(r.mx - 42, r.my - 16); addPt(r.mx + 42, r.my + 16);
+        addPt(r.sx, r.sy); addPt(r.tx, r.ty);
+      });
+      var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+      pts.forEach(function (p) {
+        mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]);
+        mny = Math.min(mny, p[1]); mxy = Math.max(mxy, p[1]);
+      });
+      if (!isFinite(mnx)) { mnx = 0; mny = 0; mxx = 320; mxy = 200; }
+      var pad = 26;
+      var W = Math.ceil(mxx - mnx + pad * 2), H = Math.ceil(mxy - mny + pad * 2);
+      var dx = pad - mnx, dy = pad - mny;
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H +
+                '" width="' + W + '" height="' + H + '" style="max-width:' + W + 'px"' +
+                ' role="img" aria-label="流程图" preserveAspectRatio="xMidYMid meet">' +
+                '<title>' + esc(g.title || '流程图') + '</title>' +
+                '<rect class="flw-bg" x="0" y="0" width="' + W + '" height="' + H + '"/>' +
+                '<g transform="translate(' + n(dx) + ',' + n(dy) + ')">' +
+                boxesSvg + edgesSvg + nodesSvg + '</g></svg>';
+
+      var out = '<div class="flw-figure">' + svg;
+      if (g.title || g.caption) {
+        var cap = g.title ? esc(g.title) : '';
+        if (g.caption) cap += (cap ? ' · ' : '') + (ctx.md.inline ? ctx.md.inline(g.caption) : esc(g.caption));
+        out += '<div class="flw-cap">' + cap + '</div>';
+      }
+      if (g.errs.length) {
+        out += '<div class="flw-errbox"><b>⚠ 有 ' + g.errs.length + ' 处需要检查：</b><br>' +
+          g.errs.slice(0, 6).map(function (x) {
+            return (x.line ? '第 ' + x.line + ' 行：' : '') + esc(x.msg);
+          }).join('<br>') + '</div>';
+      }
+      return out + '</div>';
+    }
+
+    /* ---------------- 语法隔离：先改写成私有块 ----------------
+     * 代码高亮扩展会抢走所有 ``` 围栏，因此用 preTransform 把
+     * flowchart / graph / mermaid(flowchart) 换成 %%%flow 私有标记。
+     */
+    var RE_OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(flowchart|flow|graph)\b([^`~]*)$/i;
+    var RE_MERMAID = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\s*$/i;
+    var RE_ANY_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+    var RE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+    var RE_OPEN_CTR = /^\s{0,3}:::(flowchart|flow|graph)\b(.*)$/i;
+    var RE_CLOSE_CTR = /^\s{0,3}:::\s*$/;
+    var RE_MM_HEAD = /^\s*(flowchart|graph|flow)\b/i;
+
+    ctx.md.preTransform(function (text) {
+      var src = String(text == null ? '' : text).split('\n');
+      var out = [], i = 0;
+      while (i < src.length) {
+        var line = src[i], m = line.match(RE_OPEN_FENCE), mm = line.match(RE_MERMAID);
+        if (m || mm) {
+          var ch = (m || mm)[1].charAt(0), len = (m || mm)[1].length, j = i + 1;
+          while (j < src.length) {
+            var cm = src[j].match(RE_CLOSE);
+            if (cm && cm[1].charAt(0) === ch && cm[1].length >= len) break;
+            j++;
+          }
+          if (j >= src.length) { out.push(line); i++; continue; }
+          var info = m ? (m[3] || '').trim() : '';
+          var isFlow = !!m;
+          if (mm) {
+            for (var q = i + 1; q < j; q++) {
+              if (!String(src[q]).trim()) continue;
+              isFlow = RE_MM_HEAD.test(src[q]);
+              break;
+            }
+          }
+          if (isFlow) {
+            out.push('%%%flow ' + info);
+            for (var k = i + 1; k < j; k++) out.push(src[k]);
+            out.push('%%%endflow');
+            i = j + 1; continue;
+          }
+          /* 不是流程图（可能是 mermaid mindmap）：整段原样放过 */
+          out.push(line); i++;
+          while (i < j + 1) { out.push(src[i]); i++; }
+          continue;
+        }
+        var mc = line.match(RE_OPEN_CTR);
+        if (mc) {
+          var j2 = i + 1;
+          while (j2 < src.length && !RE_CLOSE_CTR.test(src[j2])) j2++;
+          if (j2 < src.length) {
+            out.push('%%%flow ' + (mc[2] || '').trim());
+            for (var k2 = i + 1; k2 < j2; k2++) out.push(src[k2]);
+            out.push('%%%endflow');
+            i = j2 + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        /* 普通围栏：整段原样跳过，避免示例里的 ```flowchart 被转换 */
+        var mf = line.match(RE_ANY_FENCE);
+        if (mf) {
+          var ch2 = mf[1].charAt(0), n2 = mf[1].length;
+          out.push(line); i++;
+          while (i < src.length) {
+            out.push(src[i]);
+            var cc = src[i].match(RE_CLOSE);
+            if (cc && cc[1].charAt(0) === ch2 && cc[1].length >= n2) { i++; break; }
+            i++;
+          }
+          continue;
+        }
+        out.push(line); i++;
+      }
+      return out.join('\n');
+    });
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}%%%flow(?:\s|$)/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}%%%endflow\s*$/.test(lines[j])) j++;
+        return j < lines.length ? j - i + 1 : 0;
+      },
+      render: function (lines, i, n) {
+        var head = lines[i].match(/^\s{0,3}%%%flow\s*(.*)$/);
+        var body = [];
+        for (var k = i + 1; k < i + n - 1; k++) body.push(lines[k]);
+        try { return renderFigure(body, head ? head[1] : ''); }
+        catch (e) {
+          return '<div class="flw-figure"><div class="flw-errbox"><b>⚠ 流程图渲染失败：</b>' +
+                 esc(e && e.message ? e.message : e) + '</div></div>';
+        }
+      }
+    });
+
+    /* ---------------- 工具栏：模板与语法速查 ---------------- */
+    var TPL = {
+      blank: [
+        'flowchart TD',
+        '  A([开始]) --> B[处理]',
+        '  B --> C([结束])'
+      ].join(NL),
+      decision: [
+        'flowchart TD',
+        '  A([开始]) --> B[输入数据]',
+        '  B --> C{数据合法?}',
+        '  C -->|是| D[写入数据库]',
+        '  C -->|否| E[提示错误]',
+        '  D --> F([结束])',
+        '  E -.-> B',
+        '  title 数据校验流程'
+      ].join(NL),
+      lr: [
+        'flowchart LR',
+        '  A[需求] --> B[设计] --> C[开发] --> D[测试] --> E[发布]',
+        '  C -.-> |发现问题| B',
+        '  caption 迭代开发流程'
+      ].join(NL),
+      shapes: [
+        'flowchart TD',
+        '  A[矩形] --> B(圆角)',
+        '  B --> C((圆))',
+        '  C --> D{菱形}',
+        '  D --> E[[子程序]]',
+        '  E --> F[(数据库)]',
+        '  F --> G([体育场])',
+        '  G --> H{{六边形}}'
+      ].join(NL),
+      subgraph: [
+        'flowchart TD',
+        '  A([用户]) --> B[网关]',
+        '  subgraph 服务层',
+        '    B --> C[鉴权] --> D[业务]',
+        '  end',
+        '  subgraph 数据层',
+        '    D --> E[(主库)]',
+        '    D --> F[(缓存)]',
+        '  end',
+        '  title 系统分层'
+      ].join(NL),
+      styles: [
+        'flowchart LR',
+        '  classDef primary fill:#fdf1e9,stroke:#c2410c,color:#7c2d12',
+        '  classDef done fill:#e8f5ec,stroke:#15803d',
+        '  A([开始]):::primary --> B[处理]',
+        '  B --> C([完成]):::done',
+        '  class B primary',
+        '  style C stroke-width:2.5'
+      ].join(NL),
+      edges: [
+        'flowchart TD',
+        '  A --- B',
+        '  B -->|带标签| C',
+        '  C -- 另一种标签 --> D',
+        '  D -.-> E',
+        '  E ==> F',
+        '  F <--> G',
+        '  G --o H'
+      ].join(NL),
+      multi: [
+        'flowchart LR',
+        '  A[源] --> B[分支一] & C[分支二] & D[分支三]',
+        '  B & C & D --> E[汇总]',
+        '  E ==> F([结束])'
+      ].join(NL),
+      approval: [
+        'flowchart TD',
+        '  A([提交申请]) --> B{金额 ≤ 5000?}',
+        '  B -->|是| C[主管审批]',
+        '  B -->|否| D[总监审批]',
+        '  C --> E{通过?}',
+        '  D --> E',
+        '  E -->|是| F[财务付款]',
+        '  E -->|否| G[退回修改]',
+        '  G -.-> A',
+        '  F --> H([归档])',
+        '  title 报销审批流程'
+      ].join(NL)
+    };
+    var LABELS = {
+      blank: '空白骨架', decision: '判断分支 + 回路', lr: '横向流程（LR）',
+      shapes: '八种节点形状', subgraph: 'subgraph 分组', styles: 'classDef / style 着色',
+      edges: '连线与标签全集', multi: '& 多目标 / 链式', approval: '中文审批流程'
+    };
+    var HELP = [
+      '写法   ```mermaid（首行 flowchart TD） 或 ```flowchart / ```graph / ```flow',
+      '       :::flowchart … :::  容器写法也可以；围栏首行可写方向 TD LR BT RL',
+      '方向   flowchart TD|TB|BT|LR|RL，块内也可单独写 direction LR',
+      '节点   A[矩形]  A(圆角)  A((圆))  A{菱形}  A[[子程序]]  A[(圆柱)]',
+      '       A([体育场])  A{{六边形}}  A>旗帜]  A[/平行四边形/]',
+      '       文字可加引号：A["含空格的文本"]；<br> 换行；中文直接写',
+      '连线   A --> B   |   A --- B（无箭头）  |  A -->|是| B',
+      '       A -- 标签 --> B   |   A -.-> B（虚线）  |   A ==> B（粗线）',
+      '       A <--> B（双向）  |   A --o B  |   A --x B',
+      '       A --> B --> C 链式；A --> B & C 多目标；A & B --> C 多源',
+      '分组   subgraph 标题 … end，可嵌套；分组用虚线框标注',
+      '样式   classDef 类名 fill:#fdf1e9,stroke:#c2410c,color:#7c2d12',
+      '       A:::类名  /  class A,B 类名  /  style A fill:#e8f5ec',
+      '注释   %% 开头整行注释；行尾 %% 注释；; 可分隔多条语句',
+      '附加   title 图题  |  caption 图注（支持行内 Markdown）',
+      '注     click / linkStyle 等交互指令会被安全忽略，不会报错',
+      '       与 Mermaid 官方语法基本一致，网上复制的图可直接粘贴'
+    ].join(NL);
+
+    function insertTpl(h, key) {
+      var tpl = TPL[key];
+      if (!tpl) return;
+      h.insertText(NL + NL + '```flowchart' + NL + tpl + NL + '```' + NL + NL);
+      ctx.app.toast('已插入「' + LABELS[key] + '」');
+    }
+    function pickerHtml() {
+      var keys = Object.keys(TPL);
+      var btns = keys.map(function (k) {
+        return '<button class="btn ghost small" data-flw="' + k + '">' + LABELS[k] + '</button>';
+      }).join('');
+      return '<div class="flw-picker">' +
+        '<div class="flw-sec">插入示例（' + keys.length + ' 种，均为 Mermaid 语法）</div>' +
+        '<div class="flw-grid2">' + btns + '</div>' +
+        '<div class="flw-sec">语法速查</div><pre class="flw-help">' + esc(HELP) + '</pre>' +
+        '</div>';
+    }
+    ctx.ui.addButton({
+      id: 'flowchart',
+      icon: '🔀',
+      title: '流程图（Mermaid 模板 / 语法速查）',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '流程图');
+        body.onclick = function (ev) {
+          if (!ev.target || !ev.target.closest) return;
+          var b = ev.target.closest('[data-flw]');
+          if (!b) return;
+          insertTpl(h, b.getAttribute('data-flw'));
+          var mask = document.getElementById('extCustomMask');
+          if (mask) mask.classList.remove('show');
+        };
+      }
+    });
+    ctx.ui.addCommand({
+      id: 'flowchart-blank', key: 'f', ctrl: true, alt: true,
+      onClick: function (h) { insertTpl(h, 'blank'); }
+    });
+  },
+
+  dispose: function () {
+    var s = document.getElementById('flw-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});

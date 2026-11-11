@@ -1,0 +1,814 @@
+/* =========================================================
+ * 思维导图扩展  (ext-mindmap.mext)
+ * ---------------------------------------------------------
+ * 兼容 Mermaid mindmap 语法，也认 Markdown 标题 / 列表层级，
+ * 零依赖输出内联 SVG（双侧平衡树布局）。
+ *
+ *   ```mermaid
+ *   mindmap
+ *     root((中心主题))
+ *       分支一
+ *         子节点
+ *       分支二
+ *         [方形节点]
+ *   ```
+ *
+ *   ```mindmap
+ *   # 学习计划
+ *   ## 数学
+ *   - 代数
+ *   - 几何
+ *   ## 语文
+ *   - 古文
+ *   ```
+ *
+ * 也认 ```mindmap / ```mind 围栏与 :::mindmap … ::: 容器。
+ * 从 Mermaid / markmap 复制的导图可直接粘贴使用。
+ *
+ * 支持：
+ *   节点  ((圆)) (圆角) [方形] [[子程序]] {{六边形}}
+ *         ))爆炸((  )云(  :::类名  ::icon(...)（安全忽略）
+ *   层级  缩进（Mermaid）、# 标题、- / * / + 列表（markmap）
+ *   布局  根居中，一级分支左右自动平衡，曲线连接、按分支着色
+ *   附加  classDef 着色、title / caption、%% 注释、逐行错误提示
+ *   输出  纯内联 SVG，明暗主题自适应，导出 HTML 不丢图
+ * 与「代码高亮」「流程图」「几何作图」「统计图」等扩展互不冲突。
+ * ========================================================= */
+api.register({
+  name: '思维导图',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '兼容 Mermaid mindmap 与 Markdown 层级的思维导图，零依赖渲染成 SVG',
+  icon: '🧠',
+
+  init: function (ctx) {
+
+    /* ---------------- 样式（id 以 -ext-style 结尾，导出时会被收集） ---------------- */
+    var STYLE_ID = 'mind-ext-style';
+    var CSS = [
+      '.mind-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden;',
+      '  --mind-c1:#c2410c;--mind-c2:#0e7490;--mind-c3:#7c3aed;--mind-c4:#15803d;',
+      '  --mind-c5:#b45309;--mind-c6:#be185d;--mind-c7:#1d4ed8;--mind-c8:#4d7c0f}',
+      'html[data-theme="dark"] .mind-figure,html[data-theme="graphite"] .mind-figure{',
+      '  --mind-c1:#ff8a4c;--mind-c2:#38bdf8;--mind-c3:#a78bfa;--mind-c4:#4ade80;',
+      '  --mind-c5:#fbbf24;--mind-c6:#f472b6;--mind-c7:#60a5fa;--mind-c8:#a3e635}',
+      '.mind-figure svg{display:block;width:100%;height:auto;margin:0 auto}',
+      '.mind-bg{fill:var(--panel,#fff)}',
+      '.mind-link{fill:none;stroke-linecap:round;stroke-linejoin:round}',
+      '.mind-root{fill:var(--accent,#c2410c);stroke:none}',
+      '.mind-root-t{fill:var(--panel,#fff);font:600 14px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}',
+      '.mind-node-t{fill:var(--text,#221f1b);font:600 12.5px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}',
+      '.mind-leaf-t{fill:var(--text-soft,#4a453f);font:12px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}',
+      '.mind-shape{fill:var(--panel-2,#faf9f6)}',
+      '.mind-cap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}',
+      '.mind-cap p{margin:0}',
+      '.mind-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}',
+      '.mind-errbox b{font-weight:650}',
+      '.mind-picker{display:flex;flex-direction:column;gap:.8em;max-height:62vh;overflow:auto;padding-right:4px}',
+      '.mind-picker .mind-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}',
+      '.mind-picker .mind-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4rem}',
+      '.mind-picker .mind-grid2 button{justify-content:flex-start;text-align:left}',
+      '.mind-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}'
+    ].join('\n');
+
+    function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID;
+      s.textContent = CSS;
+      document.head.appendChild(s);
+    }
+    ensureStyle();
+
+    /* ---------------- 基础工具 ---------------- */
+    var NL = String.fromCharCode(10);
+    var PH = String.fromCharCode(2);
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function n(v) {
+      var x = Number(v);
+      if (!isFinite(x)) x = 0;
+      return String(Math.round(x * 100) / 100);
+    }
+    function clamp(v, a, b) { return v < a ? a : (v > b ? b : v); }
+    function safeColor(s) {
+      s = String(s == null ? '' : s).trim();
+      if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+      if (/^rgba?\(\s*[0-9.,%\s]+\)$/.test(s)) return s;
+      if (/^var\(--[A-Za-z0-9-]+\)$/.test(s)) return s;
+      if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(s)) return s;
+      return '';
+    }
+    function chUnits(c) {
+      return /[\u1100-\u115f\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6]/.test(c) ? 2 : 1;
+    }
+    function lineUnits(s) {
+      var u = 0;
+      for (var i = 0; i < s.length; i++) u += chUnits(s.charAt(i));
+      return u;
+    }
+    function wrapText(s, maxU) {
+      s = String(s == null ? '' : s).replace(/<br\s*\/?>/gi, '\n').replace(/\\n/g, '\n');
+      var paras = s.split('\n'), lines = [];
+      for (var p = 0; p < paras.length && lines.length < 5; p++) {
+        var str = paras[p].trim(), cur = '', u = 0;
+        for (var i = 0; i < str.length; i++) {
+          var c = str.charAt(i), cu = chUnits(c);
+          if (u + cu > maxU && cur) { lines.push(cur); cur = ''; u = 0; }
+          cur += c; u += cu;
+        }
+        lines.push(cur || ' ');
+      }
+      return lines.length ? lines.slice(0, 5) : [' '];
+    }
+    function cleanLabel(s) {
+      s = String(s == null ? '' : s).trim();
+      if (s.length >= 2 && ((s.charAt(0) === '"' && s.charAt(s.length - 1) === '"') ||
+                           (s.charAt(0) === "'" && s.charAt(s.length - 1) === "'"))) {
+        s = s.slice(1, -1).trim();
+      }
+      return s.replace(/\s+/g, ' ');
+    }
+    function colorVar(i) { return 'var(--mind-c' + (i % 8 + 1) + ',#c2410c)'; }
+
+    /* ---------------- 节点形状（Mermaid mindmap） ---------------- */
+    var MSHAPES = [
+      { o: '((', c: '))', s: 'circle' },
+      { o: '))', c: '((', s: 'bang' },
+      { o: '{{', c: '}}', s: 'hex' },
+      { o: '[[', c: ']]', s: 'subroutine' },
+      { o: ')', c: '(', s: 'cloud' },
+      { o: '[', c: ']', s: 'rect' },
+      { o: '(', c: ')', s: 'round' }
+    ];
+    function findClose(s, open, close) {
+      var depth = 1, i = open.length, q = null;
+      while (i < s.length) {
+        var c = s.charAt(i);
+        if (q) { if (c === q) q = null; i++; continue; }
+        if (c === '"' || c === "'") { q = c; i++; continue; }
+        if (s.substr(i, close.length) === close) {
+          depth--;
+          if (depth === 0) return i;
+          i += close.length; continue;
+        }
+        if (open.length === 2 && s.substr(i, open.length) === open) { depth++; i += open.length; continue; }
+        if (open.length === 1 && c === open) depth++;
+        i++;
+      }
+      return -1;
+    }
+    function parseMindNode(text) {
+      var t = String(text || '').trim();
+      t = t.replace(/::icon\([^)]*\)/g, '').trim();
+      var cls = '';
+      var mc = /:::([A-Za-z0-9_-]+)/.exec(t);
+      if (mc) { cls = mc[1]; t = t.replace(mc[0], '').trim(); }
+      for (var i = 0; i < t.length; i++) {
+        for (var k = 0; k < MSHAPES.length; k++) {
+          var sh = MSHAPES[k];
+          if (t.substr(i, sh.o.length) !== sh.o) continue;
+          var end = findClose(t.slice(i), sh.o, sh.c);
+          if (end >= 0) {
+            return { label: cleanLabel(t.slice(i + sh.o.length, i + end)), shape: sh.s, cls: cls };
+          }
+        }
+      }
+      return { label: cleanLabel(t), shape: null, cls: cls };
+    }
+
+    /* ---------------- 解析：三种现成写法 ---------------- */
+    function splitProps(str) {
+      var out = [], cur = '', d = 0;
+      for (var i = 0; i < str.length; i++) {
+        var c = str.charAt(i);
+        if (c === '(') d++;
+        if (c === ')') d--;
+        if (c === ',' && d === 0) { if (cur.trim()) out.push(cur); cur = ''; continue; }
+        cur += c;
+      }
+      if (cur.trim()) out.push(cur);
+      return out;
+    }
+    function parseProps(str) {
+      var out = {}, parts = splitProps(String(str || ''));
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i], idx = p.indexOf(':');
+        if (idx < 0) continue;
+        var k = p.slice(0, idx).trim().toLowerCase(), v = p.slice(idx + 1).trim();
+        if (k === 'fill' || k === 'stroke' || k === 'color' || k === 'background') {
+          var c = safeColor(v);
+          if (c) out[k === 'background' ? 'fill' : k] = c;
+        } else if (k === 'stroke-width' || k === 'opacity') {
+          var num = parseFloat(v);
+          if (isFinite(num)) out[k] = clamp(num, 0, 12);
+        }
+      }
+      return out;
+    }
+
+    function parseFigure(body, headInfo) {
+      var st = { title: '', caption: '', errs: [], classDefs: {} };
+      var info = String(headInfo || '').trim();
+      var mt = /\btitle\s+(.+)$/i.exec(info);
+      if (mt) st.title = mt[1].trim();
+
+      var raw = [];
+      for (var i = 0; i < body.length; i++) {
+        var ln = i + 1;
+        var line = String(body[i] == null ? '' : body[i]).replace(/\t/g, '    ');
+        var trimmed = line.trim();
+        if (!trimmed || /^%%/.test(trimmed)) continue;
+        line = line.replace(/\s+%%.*$/, '');
+        trimmed = line.trim();
+        if (!trimmed) continue;
+        if (/^mindmap\b/i.test(trimmed)) continue;                 // Mermaid 图声明
+        if (/^classDef\b/i.test(trimmed)) {
+          var mc = /^classDef\s+([A-Za-z0-9_-]+)\s+(.+)$/i.exec(trimmed);
+          if (mc) st.classDefs[mc[1]] = parseProps(mc[2]);
+          else st.errs.push({ line: ln, msg: 'classDef 写法应为 classDef 名称 fill:#fff' });
+          continue;
+        }
+        if (/^title\b/i.test(trimmed)) { st.title = trimmed.replace(/^title\s*/i, '').trim(); continue; }
+        if (/^caption\b/i.test(trimmed)) { st.caption = trimmed.replace(/^caption\s*/i, '').trim(); continue; }
+        var indent = line.length - line.replace(/^\s*/, '').length;
+        raw.push({ text: trimmed, indent: indent, line: ln });
+      }
+      if (!raw.length) return st;
+
+      var hasList = raw.some(function (r) { return /^[-*+]\s+/.test(r.text); });
+      var hasHeading = raw.some(function (r) { return /^#{1,6}\s+/.test(r.text); });
+      var markdown = hasList || hasHeading;
+      var mermaidUnit = 2;
+      if (!markdown) {
+        var pos = raw.map(function (r) { return r.indent; }).filter(function (x) { return x > 0; });
+        if (pos.length) mermaidUnit = Math.min.apply(null, pos);
+      }
+      var listUnit = 2;
+      if (markdown) {
+        var li = raw.filter(function (r) { return /^[-*+]\s+/.test(r.text) && r.indent > 0; })
+                    .map(function (r) { return r.indent; });
+        if (li.length) listUnit = Math.min.apply(null, li);
+      }
+
+      var lastHeading = 0;
+      var items = raw.map(function (r) {
+        var level, text = r.text;
+        if (/^#{1,6}\s+/.test(text)) {
+          var hm = /^(#{1,6})\s+(.*)$/.exec(text);
+          level = hm[1].length; lastHeading = level; text = hm[2];
+        } else if (/^[-*+]\s+/.test(text)) {
+          text = text.replace(/^[-*+]\s+/, '');
+          level = lastHeading + 1 + Math.round(r.indent / listUnit);
+        } else if (markdown) {
+          level = lastHeading + 1 + Math.round(r.indent / listUnit);
+        } else {
+          level = 1 + Math.round(r.indent / mermaidUnit);
+        }
+        return { level: level, text: text, line: r.line };
+      });
+
+      var roots = [], stack = [];
+      items.forEach(function (it) {
+        var p = parseMindNode(it.text);
+        if (!p.label) { st.errs.push({ line: it.line, msg: '空节点已跳过' }); return; }
+        var node = {
+          label: p.label, shape: p.shape, cls: p.cls, props: {},
+          children: [], color: 0, depth: 0, x: 0, y: 0, w: 0, h: 0, lines: []
+        };
+        while (stack.length && stack[stack.length - 1].level >= it.level) stack.pop();
+        if (stack.length) stack[stack.length - 1].node.children.push(node);
+        else roots.push(node);
+        stack.push({ level: it.level, node: node });
+      });
+
+      if (!roots.length) return st;
+      if (roots.length > 1) {
+        st.root = { label: st.title || '思维导图', shape: null, cls: '', props: {}, children: roots, color: 0, depth: 0 };
+      } else {
+        st.root = roots[0];
+      }
+      /* classDef 着色 */
+      (function apply(n) {
+        if (n.cls && st.classDefs[n.cls]) {
+          for (var k in st.classDefs[n.cls]) {
+            if (Object.prototype.hasOwnProperty.call(st.classDefs[n.cls], k)) n.props[k] = st.classDefs[n.cls][k];
+          }
+        }
+        n.children.forEach(apply);
+      })(st.root);
+      return st;
+    }
+
+    /* ---------------- 布局：根居中、一级分支左右平衡 ---------------- */
+    var HGAP = 56, VGAP = 12;
+
+    function measureNode(nd, depth) {
+      nd.depth = depth;
+      nd.lines = wrapText(nd.label, depth === 0 ? 15 : 18);
+      var u = 0;
+      nd.lines.forEach(function (l) { u = Math.max(u, lineUnits(l)); });
+      var px = depth === 0 ? 7.6 : 6.8;
+      var w = u * px + (depth === 0 ? 36 : (depth === 1 ? 28 : 16));
+      var h = nd.lines.length * 17 + (depth === 0 ? 22 : (depth === 1 ? 16 : 10));
+      if (nd.shape === 'circle') { w = Math.max(w + 16, 66); h = Math.max(h, w * 0.78); }
+      if (nd.shape === 'bang' || nd.shape === 'hex' || nd.shape === 'cloud') { w += 18; h += 6; }
+      if (nd.shape === 'subroutine') w += 12;
+      nd.w = clamp(w, 48, 260);
+      nd.h = clamp(h, 28, 150);
+    }
+    function subtreeH(nd) {
+      if (!nd.children.length) return nd.h;
+      var sum = 0;
+      nd.children.forEach(function (c) { sum += subtreeH(c); });
+      return Math.max(nd.h, sum + VGAP * (nd.children.length - 1));
+    }
+    function layoutTree(g) {
+      var root = g.root;
+      (function walk(nd, depth) { measureNode(nd, depth); nd.children.forEach(function (c) { walk(c, depth + 1); }); })(root, 0);
+
+      var right = [], left = [], hr = 0, hl = 0, ci = 0;
+      root.children.forEach(function (c) {
+        var hh = subtreeH(c);
+        if (hr <= hl) { right.push(c); hr += hh + VGAP; }
+        else { left.push(c); hl += hh + VGAP; }
+        c.color = ci++;
+      });
+
+      function place(nd, x, cy, side, color) {
+        nd.x = x; nd.y = cy; nd.color = color;
+        if (!nd.children.length) return;
+        var total = 0;
+        nd.children.forEach(function (c) { total += subtreeH(c); });
+        total += VGAP * (nd.children.length - 1);
+        var y = cy - total / 2;
+        nd.children.forEach(function (c) {
+          var hh = subtreeH(c);
+          var cx = x + side * (nd.w / 2 + HGAP + c.w / 2);
+          place(c, cx, y + hh / 2, side, color);
+          y += hh + VGAP;
+        });
+      }
+      function placeSide(kids, side) {
+        if (!kids.length) return;
+        var total = 0;
+        kids.forEach(function (c) { total += subtreeH(c); });
+        total += VGAP * (kids.length - 1);
+        var y = -total / 2;
+        kids.forEach(function (c) {
+          var hh = subtreeH(c);
+          var cx = side * (root.w / 2 + HGAP + c.w / 2);
+          place(c, cx, y + hh / 2, side, c.color);
+          y += hh + VGAP;
+        });
+      }
+      root.x = 0; root.y = 0; root.color = 0;
+      placeSide(right, 1);
+      placeSide(left, -1);
+    }
+
+    /* ---------------- SVG 绘制 ---------------- */
+    function styleOf(nd, base) {
+      var a = base ? [base] : [], p = nd.props;
+      if (p.fill) a.push('fill:' + p.fill);
+      if (p.stroke) a.push('stroke:' + p.stroke);
+      if (p['stroke-width']) a.push('stroke-width:' + p['stroke-width']);
+      if (p.opacity) a.push('opacity:' + p.opacity);
+      return a.length ? ' style="' + a.join(';') + '"' : '';
+    }
+    function textStyle(p) { return p.color ? ' style="fill:' + p.color + '"' : ''; }
+
+    function drawShape(nd, cls, base) {
+      var x = nd.x, y = nd.y, w = nd.w, h = nd.h;
+      var x1 = x - w / 2, x2 = x + w / 2, y1 = y - h / 2, y2 = y + h / 2;
+      var st = ' class="' + cls + '"' + styleOf(nd, base);
+      switch (nd.shape) {
+        case 'circle':
+          return '<ellipse' + st + ' cx="' + n(x) + '" cy="' + n(y) + '" rx="' + n(w / 2) + '" ry="' + n(h / 2) + '"/>';
+        case 'hex':
+          return '<path' + st + ' d="M ' + n(x1 + 11) + ' ' + n(y1) + ' L ' + n(x2 - 11) + ' ' + n(y1) +
+                 ' L ' + n(x2) + ' ' + n(y) + ' L ' + n(x2 - 11) + ' ' + n(y2) +
+                 ' L ' + n(x1 + 11) + ' ' + n(y2) + ' L ' + n(x1) + ' ' + n(y) + ' Z"/>';
+        case 'cloud':
+          return '<path' + st + ' d="M ' + n(x1 + 10) + ' ' + n(y1) + ' Q ' + n(x) + ' ' + n(y1 - 7) + ' ' + n(x2 - 10) + ' ' + n(y1) +
+                 ' Q ' + n(x2 + 6) + ' ' + n(y) + ' ' + n(x2 - 10) + ' ' + n(y2) +
+                 ' Q ' + n(x) + ' ' + n(y2 + 7) + ' ' + n(x1 + 10) + ' ' + n(y2) +
+                 ' Q ' + n(x1 - 6) + ' ' + n(y) + ' ' + n(x1 + 10) + ' ' + n(y1) + ' Z"/>';
+        case 'bang':
+          return '<path' + st + ' d="M ' + n(x) + ' ' + n(y1) + ' L ' + n(x + w * 0.18) + ' ' + n(y - h * 0.22) +
+                 ' L ' + n(x2) + ' ' + n(y - h * 0.3) + ' L ' + n(x + w * 0.25) + ' ' + n(y) +
+                 ' L ' + n(x2) + ' ' + n(y + h * 0.3) + ' L ' + n(x + w * 0.18) + ' ' + n(y + h * 0.22) +
+                 ' L ' + n(x) + ' ' + n(y2) + ' L ' + n(x - w * 0.18) + ' ' + n(y + h * 0.22) +
+                 ' L ' + n(x1) + ' ' + n(y + h * 0.3) + ' L ' + n(x - w * 0.25) + ' ' + n(y) +
+                 ' L ' + n(x1) + ' ' + n(y - h * 0.3) + ' L ' + n(x - w * 0.18) + ' ' + n(y - h * 0.22) + ' Z"/>';
+        case 'subroutine':
+          return '<rect' + st + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="3"/>' +
+                 '<path class="mind-shape" fill="none" style="stroke:' + colorVar(nd.color) + '" d="M ' +
+                 n(x1 + 8) + ' ' + n(y1 + 3) + ' V ' + n(y2 - 3) + ' M ' + n(x2 - 8) + ' ' + n(y1 + 3) + ' V ' + n(y2 - 3) + '"/>';
+        case 'rect':
+          return '<rect' + st + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="3"/>';
+        case 'round':
+          return '<rect' + st + ' x="' + n(x1) + '" y="' + n(y1) + '" width="' + n(w) + '" height="' + n(h) + '" rx="' + n(Math.min(11, h / 2)) + '"/>';
+        default:
+          return '';
+      }
+    }
+
+    function drawText(nd, cls, extraStyle) {
+      var lh = nd.depth === 0 ? 19 : 17;
+      var y0 = nd.y - (nd.lines.length - 1) * lh / 2 + (nd.depth === 0 ? 5 : 4.5);
+      var t = '<text class="' + cls + '"' + textStyle(nd.props) + (extraStyle || '') +
+              ' x="' + n(nd.x) + '" y="' + n(y0) + '" text-anchor="middle">';
+      for (var i = 0; i < nd.lines.length; i++) {
+        t += '<tspan x="' + n(nd.x) + '"' + (i ? ' dy="' + lh + '"' : '') + '>' + esc(nd.lines[i]) + '</tspan>';
+      }
+      return t + '</text>';
+    }
+
+    function drawNode(nd) {
+      var col = colorVar(nd.color);
+      if (nd.depth === 0) {
+        return '<rect class="mind-root"' + styleOf(nd, '') + ' x="' + n(nd.x - nd.w / 2) +
+               '" y="' + n(nd.y - nd.h / 2) + '" width="' + n(nd.w) + '" height="' + n(nd.h) + '" rx="' + n(Math.min(16, nd.h / 2)) + '"/>' +
+               drawText(nd, 'mind-root-t');
+      }
+      if (nd.shape) {
+        return drawShape(nd, 'mind-shape', 'stroke:' + col + ';stroke-width:1.5') + drawText(nd, 'mind-node-t');
+      }
+      if (nd.depth === 1) {
+        return '<rect x="' + n(nd.x - nd.w / 2) + '" y="' + n(nd.y - nd.h / 2) +
+               '" width="' + n(nd.w) + '" height="' + n(nd.h) + '" rx="10"' +
+               styleOf(nd, 'fill:' + col + ';fill-opacity:.12;stroke:' + col + ';stroke-width:1.6') + '/>' +
+               drawText(nd, 'mind-node-t');
+      }
+      /* 深层节点：纯文字 + 一条细下划线，避免整张图都是方框 */
+      var uy = nd.y + nd.h / 2 - 2;
+      return '<path class="mind-link" d="M ' + n(nd.x - nd.w / 2 + 3) + ' ' + n(uy) +
+             ' L ' + n(nd.x + nd.w / 2 - 3) + ' ' + n(uy) + '" style="stroke:' + col + ';stroke-width:1.3;opacity:.55"/>' +
+             drawText(nd, 'mind-leaf-t');
+    }
+
+    function linkPath(p, c, side) {
+      var fx = p.x + side * p.w / 2, fy = p.y;
+      var tx = c.x - side * c.w / 2, ty = c.y;
+      var mx = (fx + tx) / 2;
+      return 'M ' + n(fx) + ' ' + n(fy) + ' C ' + n(mx) + ' ' + n(fy) + ', ' +
+             n(mx) + ' ' + n(ty) + ', ' + n(tx) + ' ' + n(ty);
+    }
+
+    function renderFigure(lines, headInfo) {
+      var g = parseFigure(lines, headInfo);
+      if (!g.root) {
+        return '<div class="mind-figure"><div class="mind-errbox"><b>⚠ 思维导图为空：</b>' +
+               '写一行根节点，例如 <code>root((中心主题))</code>，或用 <code># 标题</code> / <code>- 列表</code></div></div>';
+      }
+      layoutTree(g);
+
+      var links = '', shapes = '', pts = [];
+      function addPt(x, y) { pts.push([x, y]); }
+      (function walk(nd, side) {
+        addPt(nd.x - nd.w / 2 - 3, nd.y - nd.h / 2 - 3);
+        addPt(nd.x + nd.w / 2 + 3, nd.y + nd.h / 2 + 3);
+        shapes += drawNode(nd);
+        nd.children.forEach(function (c) {
+          var sd = side || (c.x >= nd.x ? 1 : -1);
+          var col = colorVar(c.color);
+          var wid = nd.depth === 0 ? 3.2 : (nd.depth === 1 ? 2.2 : 1.5);
+          links += '<path class="mind-link" d="' + linkPath(nd, c, sd) +
+                   '" style="stroke:' + col + ';stroke-width:' + wid + '"/>';
+          walk(c, sd);
+        });
+      })(g.root, 0);
+
+      var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+      pts.forEach(function (p) {
+        mnx = Math.min(mnx, p[0]); mxx = Math.max(mxx, p[0]);
+        mny = Math.min(mny, p[1]); mxy = Math.max(mxy, p[1]);
+      });
+      if (!isFinite(mnx)) { mnx = 0; mny = 0; mxx = 360; mxy = 220; }
+      var pad = 30;
+      var W = Math.ceil(mxx - mnx + pad * 2), H = Math.ceil(mxy - mny + pad * 2);
+      var dx = pad - mnx, dy = pad - mny;
+      var svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H +
+                '" width="' + W + '" height="' + H + '" style="max-width:' + W + 'px"' +
+                ' role="img" aria-label="思维导图" preserveAspectRatio="xMidYMid meet">' +
+                '<title>' + esc(g.title || g.root.label || '思维导图') + '</title>' +
+                '<rect class="mind-bg" x="0" y="0" width="' + W + '" height="' + H + '"/>' +
+                '<g transform="translate(' + n(dx) + ',' + n(dy) + ')">' + links + shapes + '</g></svg>';
+
+      var out = '<div class="mind-figure">' + svg;
+      if (g.title || g.caption) {
+        var cap = g.title ? esc(g.title) : '';
+        if (g.caption) cap += (cap ? ' · ' : '') + (ctx.md.inline ? ctx.md.inline(g.caption) : esc(g.caption));
+        out += '<div class="mind-cap">' + cap + '</div>';
+      }
+      if (g.errs.length) {
+        out += '<div class="mind-errbox"><b>⚠ 有 ' + g.errs.length + ' 处需要检查：</b><br>' +
+          g.errs.slice(0, 6).map(function (x) {
+            return (x.line ? '第 ' + x.line + ' 行：' : '') + esc(x.msg);
+          }).join('<br>') + '</div>';
+      }
+      return out + '</div>';
+    }
+
+    /* ---------------- 语法隔离：先改写成私有块 ----------------
+     * 代码高亮扩展会抢走所有 ``` 围栏；mermaid 围栏只在首行是
+     * mindmap 时才接管，流程图块会原样留给流程图扩展。
+     */
+    var RE_OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(mindmap|mind)\b([^`~]*)$/i;
+    var RE_MERMAID = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\s*$/i;
+    var RE_ANY_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+    var RE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+    var RE_OPEN_CTR = /^\s{0,3}:::(mindmap|mind)\b(.*)$/i;
+    var RE_CLOSE_CTR = /^\s{0,3}:::\s*$/;
+    var RE_MM_HEAD = /^\s*mindmap\b/i;
+
+    ctx.md.preTransform(function (text) {
+      var src = String(text == null ? '' : text).split('\n');
+      var out = [], i = 0;
+      while (i < src.length) {
+        var line = src[i], m = line.match(RE_OPEN_FENCE), mm = line.match(RE_MERMAID);
+        if (m || mm) {
+          var f = m || mm, ch = f[1].charAt(0), len = f[1].length, j = i + 1;
+          while (j < src.length) {
+            var cm = src[j].match(RE_CLOSE);
+            if (cm && cm[1].charAt(0) === ch && cm[1].length >= len) break;
+            j++;
+          }
+          if (j >= src.length) { out.push(line); i++; continue; }
+          var info = m ? (m[3] || '').trim() : '';
+          var isMind = !!m;
+          if (mm) {
+            for (var q = i + 1; q < j; q++) {
+              if (!String(src[q]).trim()) continue;
+              isMind = RE_MM_HEAD.test(src[q]);
+              break;
+            }
+          }
+          if (isMind) {
+            out.push('%%%mind ' + info);
+            for (var k = i + 1; k < j; k++) out.push(src[k]);
+            out.push('%%%endmind');
+            i = j + 1; continue;
+          }
+          out.push(line); i++;
+          while (i < j + 1) { out.push(src[i]); i++; }
+          continue;
+        }
+        var mc = line.match(RE_OPEN_CTR);
+        if (mc) {
+          var j2 = i + 1;
+          while (j2 < src.length && !RE_CLOSE_CTR.test(src[j2])) j2++;
+          if (j2 < src.length) {
+            out.push('%%%mind ' + (mc[2] || '').trim());
+            for (var k2 = i + 1; k2 < j2; k2++) out.push(src[k2]);
+            out.push('%%%endmind');
+            i = j2 + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        var mf = line.match(RE_ANY_FENCE);
+        if (mf) {
+          var ch2 = mf[1].charAt(0), n2 = mf[1].length;
+          out.push(line); i++;
+          while (i < src.length) {
+            out.push(src[i]);
+            var cc = src[i].match(RE_CLOSE);
+            if (cc && cc[1].charAt(0) === ch2 && cc[1].length >= n2) { i++; break; }
+            i++;
+          }
+          continue;
+        }
+        out.push(line); i++;
+      }
+      return out.join('\n');
+    });
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}%%%mind(?:\s|$)/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}%%%endmind\s*$/.test(lines[j])) j++;
+        return j < lines.length ? j - i + 1 : 0;
+      },
+      render: function (lines, i, n) {
+        var head = lines[i].match(/^\s{0,3}%%%mind\s*(.*)$/);
+        var body = [];
+        for (var k = i + 1; k < i + n - 1; k++) body.push(lines[k]);
+        try { return renderFigure(body, head ? head[1] : ''); }
+        catch (e) {
+          return '<div class="mind-figure"><div class="mind-errbox"><b>⚠ 思维导图渲染失败：</b>' +
+                 esc(e && e.message ? e.message : e) + '</div></div>';
+        }
+      }
+    });
+
+    /* ---------------- 工具栏：模板与语法速查 ---------------- */
+    var TPL = {
+      blank: [
+        'mindmap',
+        '  root((中心主题))',
+        '    分支一',
+        '      子节点',
+        '    分支二',
+        '      子节点'
+      ].join(NL),
+      basic: [
+        'mindmap',
+        '  root((A Boat))',
+        '    写作',
+        '      分屏预览',
+        '      自动保存',
+        '      大纲跳转',
+        '    扩展',
+        '      几何作图',
+        '      统计图',
+        '      流程图',
+        '    输出',
+        '      导出 HTML',
+        '      打印',
+        '  title A Boat 能力导图'
+      ].join(NL),
+      shapes: [
+        'mindmap',
+        '  root((形状))',
+        '    [方形]',
+        '    (圆角)',
+        '    ((圆形))',
+        '    {{六边形}}',
+        '    [[子程序]]',
+        '    )云形(',
+        '    ))爆炸((',
+        '    着色节点:::hot',
+        '  classDef hot fill:#fdf1e9,stroke:#c2410c,color:#7c2d12'
+      ].join(NL),
+      markdown: [
+        '# 项目计划',
+        '## 需求',
+        '- 调研',
+        '- 评审',
+        '## 开发',
+        '- 前端',
+        '  - 组件',
+        '  - 样式',
+        '- 后端',
+        '## 发布',
+        '- 测试',
+        '- 上线',
+        'title 用 Markdown 直接画导图'
+      ].join(NL),
+      list: [
+        '- 中心主题',
+        '  - 分支一',
+        '    - 叶子 A',
+        '    - 叶子 B',
+        '  - 分支二',
+        '    - 叶子 C',
+        '  - 分支三',
+        '    - 叶子 D',
+        '    - 叶子 E'
+      ].join(NL),
+      study: [
+        'mindmap',
+        '  root((期末复习))',
+        '    数学',
+        '      函数与导数',
+        '      解析几何',
+        '      概率统计',
+        '    物理',
+        '      力学',
+        '      电磁学',
+        '    语文',
+        '      古诗文',
+        '      作文',
+        '    英语',
+        '      词汇',
+        '      阅读',
+        '  title 期末复习计划'
+      ].join(NL),
+      wide: [
+        'mindmap',
+        '  root((知识图谱))',
+        '    前端',
+        '      HTML',
+        '      CSS',
+        '      JavaScript',
+        '    后端',
+        '      Node.js',
+        '      数据库',
+        '    运维',
+        '      Docker',
+        '      CI/CD',
+        '    设计',
+        '      排版',
+        '      配色',
+        '    测试',
+        '      单元测试',
+        '      端到端',
+        '    文档',
+        '      手册',
+        '      API'
+      ].join(NL),
+      deep: [
+        'mindmap',
+        '  root((四层结构))',
+        '    第一层',
+        '      第二层',
+        '        第三层',
+        '          第四层 A',
+        '          第四层 B',
+        '    另一分支',
+        '      细节一',
+        '      细节二'
+      ].join(NL),
+      mermaid: [
+        'mindmap',
+        '  root((Mermaid 原样粘贴))',
+        '    官网示例',
+        '      Origins',
+        '        Long history',
+        '      Research',
+        '        Popularisation',
+        '    工具',
+        '      Typora',
+        '      GitHub',
+        '  %% 以 %% 开头的行是注释',
+        '  caption 兼容 Mermaid 官方 mindmap 语法'
+      ].join(NL)
+    };
+    var LABELS = {
+      blank: '空白骨架', basic: 'A Boat 能力导图', shapes: '七种节点形状',
+      markdown: 'Markdown 标题 + 列表', list: '纯列表层级', study: '期末复习计划',
+      wide: '多分支自动左右平衡', deep: '四层深结构', mermaid: 'Mermaid 原样粘贴'
+    };
+    var HELP = [
+      '写法   ```mermaid（首行 mindmap） 或 ```mindmap / ```mind 围栏',
+      '       :::mindmap … ::: 容器写法也可以',
+      '层级1  Mermaid：缩进决定层级，2 或 4 空格自动识别',
+      '       mindmap',
+      '         root((中心))',
+      '           分支一',
+      '             子节点',
+      '层级2  Markdown：# ## ### 标题 + - / * / + 列表（markmap 写法）',
+      '       同一段里标题与列表可混用，列表自动挂在最近的标题下',
+      '形状   ((圆))  (圆角)  [方形]  [[子程序]]  {{六边形}}',
+      '       )云(  ))爆炸((   id((带 id 的形状))',
+      '       :::类名 配合 classDef 着色；::icon(...) 安全忽略',
+      '样式   classDef hot fill:#fdf1e9,stroke:#c2410c,color:#7c2d12',
+      '注释   %% 整行注释或行尾注释；空行忽略',
+      '附加   title 图题  |  caption 图注（支持行内 Markdown）',
+      '布局   根居中，一级分支按高度自动分配到左右两侧，按分支着色',
+      '注     <br> 可在文字里换行；长文字自动折行；纯文字节点带下划线',
+      '       与 Mermaid / markmap 语法基本一致，网上复制的导图可直接粘贴'
+    ].join(NL);
+
+    function insertTpl(h, key) {
+      var tpl = TPL[key];
+      if (!tpl) return;
+      h.insertText(NL + NL + '```mindmap' + NL + tpl + NL + '```' + NL + NL);
+      ctx.app.toast('已插入「' + LABELS[key] + '」');
+    }
+    function pickerHtml() {
+      var keys = Object.keys(TPL);
+      var btns = keys.map(function (k) {
+        return '<button class="btn ghost small" data-mind="' + k + '">' + LABELS[k] + '</button>';
+      }).join('');
+      return '<div class="mind-picker">' +
+        '<div class="mind-sec">插入示例（' + keys.length + ' 种，Mermaid / Markdown 语法）</div>' +
+        '<div class="mind-grid2">' + btns + '</div>' +
+        '<div class="mind-sec">语法速查</div><pre class="mind-help">' + esc(HELP) + '</pre>' +
+        '</div>';
+    }
+    ctx.ui.addButton({
+      id: 'mindmap',
+      icon: '🧠',
+      title: '思维导图（Mermaid 模板 / 语法速查）',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '思维导图');
+        body.onclick = function (ev) {
+          if (!ev.target || !ev.target.closest) return;
+          var b = ev.target.closest('[data-mind]');
+          if (!b) return;
+          insertTpl(h, b.getAttribute('data-mind'));
+          var mask = document.getElementById('extCustomMask');
+          if (mask) mask.classList.remove('show');
+        };
+      }
+    });
+    ctx.ui.addCommand({
+      id: 'mindmap-blank', key: 'm', ctrl: true, alt: true,
+      onClick: function (h) { insertTpl(h, 'blank'); }
+    });
+  },
+
+  dispose: function () {
+    var s = document.getElementById('mind-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});
