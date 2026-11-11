@@ -587,14 +587,14 @@
 </div>
 <div class="drop-hint" id="dropHint">松开以导入 Markdown 文件（可同时打开多个）</div>
 <input type="file" id="fileInput" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" multiple hidden>
-<input type="file" id="extInput" accept=".mext,.js,text/javascript,application/javascript" hidden>
+<input type="file" id="extInput" accept=".mext,.js,text/javascript,application/javascript" multiple hidden>
 
 <div class="modal-mask" id="extMask">
   <div class="modal" role="dialog" aria-modal="true">
     <div class="modal-head">
       <h3>扩展</h3>
       <button class="btn ghost small" id="extDocsBtn">格式说明</button>
-      <button class="btn primary small" id="extImportBtn">导入扩展</button>
+      <button class="btn primary small" id="extImportBtn" title="支持一次选择多个 .mext / .js 文件">导入扩展</button>
       <button class="btn ghost icon" id="extCloseBtn" title="关闭">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
       </button>
@@ -2223,7 +2223,7 @@ const MD = (function () {
   function renderExtList(store) {
     extList.innerHTML = '';
     if (!store.length) {
-      extList.innerHTML = '<div class="ext-empty">还没有导入扩展。<br>点右上角「导入扩展」选择 <code>.mext</code> 文件即可。</div>';
+      extList.innerHTML = '<div class="ext-empty">还没有导入扩展。<br>点右上角「导入扩展」选择 <code>.mext</code> 文件即可（可一次多选）。</div>';
       return;
     }
     store.forEach(function (ext) {
@@ -2317,17 +2317,36 @@ const MD = (function () {
   };
   document.getElementById('extImportBtn').onclick = function () { extInput.click(); };
   extInput.onchange = function () {
-    const f = extInput.files && extInput.files[0];
-    if (!f) return;
-    if (!window.confirm('扩展会作为 JavaScript 在本页执行。\n只导入你信任的来源。\n\n继续导入「' + f.name + '」吗？')) return;
-    const reader = new FileReader();
-    reader.onload = function () {
-      const ext = importExtension(String(reader.result), f.name);
-      if (ext && !ext.error) { rememberTabExts(); toast('已导入扩展：' + ext.name); }
-      else if (ext && ext.error) toast('扩展导入失败：' + ext.error);
-    };
-    reader.readAsText(f, 'utf-8');
+    const files = extInput.files ? Array.prototype.slice.call(extInput.files) : [];
     extInput.value = '';
+    if (!files.length) return;
+    // 只保留 .mext / .js 文件（accept 仅作提示，这里再兜一层）
+    const valid = files.filter(function (f) {
+      return /\.(mext|js)$/i.test(f.name || '');
+    });
+    if (!valid.length) { toast('请选择 .mext 或 .js 扩展文件'); return; }
+    if (!window.confirm('扩展会作为 JavaScript 在本页执行。\n只导入你信任的来源。\n\n即将导入 ' + valid.length + ' 个扩展：\n' +
+        valid.map(function (f) { return '· ' + f.name; }).join('\n'))) return;
+    let done = 0, ok = 0, fail = 0;
+    valid.forEach(function (f) {
+      const reader = new FileReader();
+      reader.onload = function () {
+        const ext = importExtension(String(reader.result), f.name);
+        if (ext && !ext.error) ok++; else if (ext && ext.error) fail++;
+        if (++done === valid.length) finishImport(ok, fail);
+      };
+      reader.onerror = function () {
+        fail++;
+        if (++done === valid.length) finishImport(ok, fail);
+      };
+      reader.readAsText(f, 'utf-8');
+    });
+    function finishImport(okCount, failCount) {
+      loadExtensions();
+      rememberTabExts();
+      if (failCount === 0) toast('已导入 ' + okCount + ' 个扩展');
+      else toast('已导入 ' + okCount + ' 个，' + failCount + ' 个失败');
+    }
   };
   extList.addEventListener('click', function (e) {
     const del = e.target.closest('.ext-del');
