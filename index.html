@@ -164,8 +164,51 @@
 
   .sep{width:1px; height:20px; background:var(--line); flex:0 0 auto;}
 
+  /* ---------- 标签栏 ---------- */
+  .tabbar{
+    height:36px; display:flex; align-items:stretch; flex:0 0 auto;
+    background:var(--panel-2); border-bottom:1px solid var(--line);
+    padding:0 8px; overflow-x:auto; overflow-y:hidden;
+    user-select:none; scrollbar-width:thin;
+  }
+  .tabbar::-webkit-scrollbar{height:4px;}
+  .tabbar::-webkit-scrollbar-thumb{background:var(--line-strong); border-radius:2px;}
+  .tab{
+    display:flex; align-items:center; gap:6px; flex:0 0 auto;
+    min-width:92px; max-width:230px;
+    padding:0 7px 0 10px; margin:5px 2px 0 0;
+    background:transparent; border:1px solid transparent; border-bottom:none;
+    border-radius:8px 8px 0 0; cursor:pointer;
+    color:var(--muted); font-size:12.5px; white-space:nowrap;
+    position:relative; top:1px;
+  }
+  .tab:hover{background:var(--panel); color:var(--text-soft);}
+  .tab.on{
+    background:var(--panel); color:var(--text); border-color:var(--line);
+    font-weight:600;
+  }
+  .tab-label{flex:1 1 auto; overflow:hidden; text-overflow:ellipsis;}
+  .tab-dot{
+    width:6px; height:6px; border-radius:50%; background:var(--accent);
+    flex:0 0 auto; opacity:0;
+  }
+  .tab.dirty .tab-dot{opacity:1;}
+  .tab-x{
+    flex:0 0 auto; width:16px; height:16px; padding:0;
+    border:none; border-radius:4px; background:transparent;
+    color:var(--muted); font-size:14px; line-height:14px; cursor:pointer;
+  }
+  .tab-x:hover{background:var(--line); color:var(--text);}
+  .tab-add{
+    flex:0 0 auto; align-self:center; margin-left:6px;
+    width:24px; height:24px; padding:0; border:1px solid transparent;
+    border-radius:6px; background:transparent; color:var(--muted);
+    font-size:15px; line-height:1; cursor:pointer;
+  }
+  .tab-add:hover{background:var(--panel); border-color:var(--line); color:var(--accent);}
+
   /* ---------- 主区域 ---------- */
-  .main{display:flex; height:calc(100vh - 54px - 30px); padding:10px; gap:0; position:relative;}
+  .main{display:flex; height:calc(100vh - 54px - 36px - 30px); padding:10px; gap:0; position:relative;}
   .pane{
     background:var(--panel); border:1px solid var(--line);
     display:flex; flex-direction:column; overflow:hidden; min-width:0;
@@ -393,7 +436,7 @@
 
   @media(max-width:820px){
     .brand-name{display:none;}
-    .main{height:calc(100vh - 54px - 30px); flex-direction:column;}
+    .main{height:calc(100vh - 54px - 36px - 30px); flex-direction:column;}
     .pane-edit{flex:1 1 50%; border-radius:12px 12px 0 0;}
     .pane-preview{flex:1 1 50%; border-radius:0 0 12px 12px; margin-left:0; margin-top:-1px;}
     .divider{display:none;}
@@ -404,7 +447,7 @@
   }
 
   @media print{
-    .topbar,.statusbar,.pane-edit,.divider,.outline,.toast{display:none !important;}
+    .topbar,.tabbar,.statusbar,.pane-edit,.divider,.outline,.toast{display:none !important;}
     body{overflow:visible; background:#fff;}
     .main{height:auto; padding:0; display:block;}
     .pane-preview{border:none; border-radius:0;}
@@ -500,6 +543,8 @@
   </div>
 </div>
 
+<div class="tabbar" id="tabbar" aria-label="已打开的文档标签"></div>
+
 <div class="main" id="main">
   <section class="pane pane-edit">
     <div class="editor-wrap">
@@ -521,7 +566,7 @@
   <span id="statCount">0 字</span>
   <span id="statLine">1 行</span>
   <span id="statRead">约 0 分钟</span>
-  <span style="opacity:.75">Ctrl+B 加粗 · Ctrl+I 斜体 · Ctrl+M 公式 · Ctrl+S 保存</span>
+  <span style="opacity:.75">Ctrl+B 加粗 · Ctrl+I 斜体 · Ctrl+M 公式 · Ctrl+S 保存 · Alt+←/→ 切换标签</span>
 </div>
 
 <div class="outline" id="outlineBox"></div>
@@ -540,8 +585,8 @@
   <div class="tm-title">主题</div>
   <div class="tm-list" id="themeList"></div>
 </div>
-<div class="drop-hint" id="dropHint">松开以导入 Markdown 文件</div>
-<input type="file" id="fileInput" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" hidden>
+<div class="drop-hint" id="dropHint">松开以导入 Markdown 文件（可同时打开多个）</div>
+<input type="file" id="fileInput" accept=".md,.markdown,.mdown,.txt,text/markdown,text/plain" multiple hidden>
 <input type="file" id="extInput" accept=".mext,.js,text/javascript,application/javascript" hidden>
 
 <div class="modal-mask" id="extMask">
@@ -1037,6 +1082,153 @@ const MD = (function () {
   const THEME_KEY = 'mojian.md.theme.v1';
   const currentFile = { name: null };
 
+  /* =========================================================
+     多文档标签页
+     每个标签持有独立的正文、标题、文件名、扩展声明、光标与滚动位置。
+     ========================================================= */
+  const tabbar = document.getElementById('tabbar');
+  const TABS_KEY = 'mojian.md.workspace.v1';
+  let tabs = [];
+  let activeTabId = null;
+  let tabSeq = 0;
+
+  function newTabId() { return 'tab_' + (++tabSeq) + '_' + Date.now().toString(36); }
+  function makeTab(o) {
+    o = o || {};
+    return {
+      id: o.id || newTabId(),
+      title: o.title || '未命名文档',
+      content: typeof o.content === 'string' ? o.content : '',
+      filename: o.filename || null,
+      // null = 该文档无扩展声明（按需求视为「无扩展」）；数组 = 需启用的扩展名
+      exts: (o.exts === undefined || o.exts === null) ? null : o.exts.slice(),
+      dirty: !!o.dirty,
+      selStart: o.selStart || 0,
+      selEnd: (o.selEnd == null ? (o.selStart || 0) : o.selEnd),
+      scrollTop: o.scrollTop || 0,
+      previewTop: o.previewTop || 0
+    };
+  }
+  function getActiveTab() {
+    for (let i = 0; i < tabs.length; i++) if (tabs[i].id === activeTabId) return tabs[i];
+    return null;
+  }
+  function tabLabel(t) { return (t.title && t.title.trim()) ? t.title.trim() : '未命名文档'; }
+  function captureActiveTab() {
+    const t = getActiveTab();
+    if (!t) return;
+    t.content = editor.value;
+    t.title = titleInput.value;
+    t.filename = currentFile.name;
+    t.selStart = editor.selectionStart;
+    t.selEnd = editor.selectionEnd;
+    t.scrollTop = editor.scrollTop;
+    t.previewTop = previewScroll.scrollTop;
+  }
+  function desiredExtNames(t) { return t.exts === null ? [] : t.exts.slice(); }
+  function applyExtForTab(t, force) {
+    const desired = desiredExtNames(t);
+    if (!force) {
+      const cur = activeExtensionNames();
+      if (cur.length === desired.length && cur.every(function (n) { return desired.indexOf(n) >= 0; })) return;
+    }
+    applyDocExtensions(desired.map(function (n) { return { name: n }; }));
+  }
+  function loadTabIntoUI(t, opts) {
+    opts = opts || {};
+    editor.value = t.content;
+    titleInput.value = t.title;
+    currentFile.name = t.filename;
+    if (!opts.skipExt) applyExtForTab(t, !!opts.forceExt);
+    doRender();
+    editor.scrollTop = t.scrollTop || 0;
+    previewScroll.scrollTop = t.previewTop || 0;
+    try { editor.setSelectionRange(t.selStart || 0, t.selEnd || 0); } catch (e) {}
+  }
+  function renderTabs() {
+    tabbar.innerHTML = '';
+    tabs.forEach(function (t) {
+      const el = document.createElement('div');
+      el.className = 'tab' + (t.id === activeTabId ? ' on' : '') + (t.dirty ? ' dirty' : '');
+      el.dataset.id = t.id;
+      el.title = (t.filename || tabLabel(t)) + (t.dirty ? ' · 有未保存修改' : '');
+      const dot = document.createElement('span'); dot.className = 'tab-dot';
+      const label = document.createElement('span'); label.className = 'tab-label'; label.textContent = tabLabel(t);
+      const x = document.createElement('button');
+      x.className = 'tab-x'; x.type = 'button'; x.title = '关闭标签'; x.textContent = '×';
+      el.appendChild(dot); el.appendChild(label); el.appendChild(x);
+      tabbar.appendChild(el);
+    });
+    const add = document.createElement('button');
+    add.className = 'tab-add'; add.type = 'button'; add.title = '新建空白文档'; add.textContent = '＋';
+    tabbar.appendChild(add);
+    const on = tabbar.querySelector('.tab.on');
+    if (on && typeof on.scrollIntoView === 'function') {
+      try { on.scrollIntoView({ block: 'nearest', inline: 'nearest' }); } catch (e) {}
+    }
+  }
+  function markTabDirty(t) {
+    const el = tabbar.querySelector('.tab[data-id="' + t.id + '"]');
+    if (el) el.classList.add('dirty');
+  }
+  function switchToTab(t) {
+    captureActiveTab();
+    activeTabId = t.id;
+    loadTabIntoUI(t);
+    renderTabs();
+  }
+  function activateTab(id) {
+    const t = tabs.filter(function (x) { return x.id === id; })[0];
+    if (!t || id === activeTabId) return;
+    switchToTab(t);
+  }
+  function createBlankTab() {
+    const cur = getActiveTab();
+    const t = makeTab({ title: '未命名文档', content: '', exts: cur ? desiredExtNames(cur) : [] });
+    tabs.push(t);
+    switchToTab(t);
+    persist();
+    editor.focus();
+    toast('已新建标签页');
+  }
+  function closeTab(id) {
+    const idx = tabs.findIndex(function (t) { return t.id === id; });
+    if (idx < 0) return;
+    if (id === activeTabId) captureActiveTab();
+    const t = tabs[idx];
+    if (t.dirty && t.content.trim() && !window.confirm('「' + tabLabel(t) + '」可能有未保存的修改，确定关闭该标签吗？')) return;
+    const wasActive = (id === activeTabId);
+    tabs.splice(idx, 1);
+    if (!tabs.length) {
+      const nt = makeTab({ title: '未命名文档', content: '', exts: [] });
+      tabs.push(nt);
+      activeTabId = null;
+      switchToTab(nt);
+      persist();
+      return;
+    }
+    if (wasActive) {
+      activeTabId = null;
+      const next = tabs[Math.min(idx, tabs.length - 1)];
+      loadTabIntoUI(next);
+      activeTabId = next.id;
+    }
+    renderTabs();
+    persist();
+  }
+  tabbar.addEventListener('click', function (e) {
+    if (e.target.closest('.tab-add')) { createBlankTab(); return; }
+    const tabEl = e.target.closest('.tab');
+    if (!tabEl) return;
+    if (e.target.closest('.tab-x')) { closeTab(tabEl.dataset.id); return; }
+    activateTab(tabEl.dataset.id);
+  });
+  tabbar.addEventListener('auxclick', function (e) {
+    if (e.button !== 1) return;
+    const tabEl = e.target.closest('.tab');
+    if (tabEl) { e.preventDefault(); closeTab(tabEl.dataset.id); }
+  });
+
   const SAMPLE = [
     '# 欢迎使用 A Boat ✍️',
     '',
@@ -1048,7 +1240,7 @@ const MD = (function () {
     '## 三步上手',
     '',
     '1. **左边写，右边看。** 右上角可切换「仅编辑 / 分屏 / 仅预览」。',
-    '2. **`Ctrl + S` 存成 `.md` 文件。** 也可以把 `.md` 文件直接拖进窗口打开。',
+    '2. **`Ctrl + S` 存成 `.md` 文件。** 也可以把 `.md` 文件直接拖进窗口打开，一次拖多个会各开一个标签页。',
     '3. **`Ctrl + M` 插入公式。** 弹出的面板里点一下，LaTeX 就写进来了。',
     '',
     '## 快捷键',
@@ -1091,6 +1283,7 @@ const MD = (function () {
     '## 内容去哪儿了',
     '',
     '- 自动保存在**本机浏览器**，不上传任何服务器',
+    '- 每篇文档一个**标签页**：点标签切换、点 × 关闭、点 ＋ 新建；`Alt + ←/→` 也能切换',
     '- 点顶部的列表图标可打开**文档大纲**，长文跳转很方便',
     '- 导出 HTML 会把排版和公式一起打包成独立文件',
     '',
@@ -1137,23 +1330,18 @@ const MD = (function () {
     if (btn.dataset.action === 'open') document.getElementById('fileInput').click();
   });
 
-  /* 载入教程 */
-  function loadTutorial(force) {
-    const hasContent = editor.value.trim() && editor.value.trim() !== SAMPLE.trim();
-    if (hasContent && !force) {
-      const ok = window.confirm('载入教程会替换当前内容。\n如果还没保存，建议先按 Ctrl + S 导出。\n\n继续吗？');
-      if (!ok) return;
-    }
-    editor.value = SAMPLE;
-    titleInput.value = '欢迎使用 A Boat';
-    currentFile.name = null;
-    doRender();
-    persist();
-    editor.focus();
+  /* 载入教程：在新标签页打开，不覆盖当前文档 */
+  function loadTutorial() {
+    const cur = getActiveTab();
+    const t = makeTab({ title: '欢迎使用 A Boat', content: SAMPLE, exts: cur ? desiredExtNames(cur) : [] });
+    tabs.push(t);
+    switchToTab(t);
     editor.setSelectionRange(0, 0);
     editor.scrollTop = 0;
     previewScroll.scrollTop = 0;
-    toast('教程已载入，可以随意改写');
+    persist();
+    editor.focus();
+    toast('教程已在新标签页打开');
   }
   document.getElementById('btnHelp').onclick = function () { loadTutorial(false); };
 
@@ -1224,11 +1412,10 @@ const MD = (function () {
   let autosaveTimer = null;
   function persist() {
     setSaveState('saving');
+    captureActiveTab();
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({
-        title: titleInput.value,
-        content: editor.value,
-        ts: Date.now()
+      localStorage.setItem(TABS_KEY, JSON.stringify({
+        tabs: tabs, activeId: activeTabId, ts: Date.now()
       }));
       setTimeout(function () {
         setSaveState('saved');
@@ -1252,16 +1439,33 @@ const MD = (function () {
 
   function restore() {
     let data = null;
-    try { data = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) {}
-    if (data && typeof data.content === 'string' && data.content.trim()) {
-      editor.value = data.content;
-      titleInput.value = data.title || '未命名文档';
-      statusText.textContent = '已恢复上次编辑的内容';
+    try { data = JSON.parse(localStorage.getItem(TABS_KEY) || 'null'); } catch (e) {}
+    if (data && Array.isArray(data.tabs) && data.tabs.length) {
+      tabs = data.tabs.map(function (o) { return (o && typeof o === 'object') ? makeTab(o) : null; })
+                      .filter(Boolean);
+      activeTabId = (data.activeId && tabs.some(function (t) { return t.id === data.activeId; }))
+        ? data.activeId : tabs[0].id;
+      statusText.textContent = '已恢复上次编辑的 ' + tabs.length + ' 个标签页';
     } else {
-      editor.value = SAMPLE;
-      titleInput.value = '欢迎使用 A Boat';
-      statusText.textContent = '已就绪';
+      // 兼容旧版单文档自动保存数据
+      let old = null;
+      try { old = JSON.parse(localStorage.getItem(STORE_KEY) || 'null'); } catch (e) {}
+      const hasOld = old && typeof old.content === 'string' && old.content.trim();
+      const first = makeTab({
+        title: (old && old.title) || '欢迎使用 A Boat',
+        content: hasOld ? old.content : SAMPLE,
+        exts: null
+      });
+      tabs = [first];
+      activeTabId = first.id;
+      statusText.textContent = hasOld ? '已恢复上次编辑的内容' : '已就绪';
     }
+    if (!tabs.length) {
+      const first = makeTab({ title: '欢迎使用 A Boat', content: SAMPLE, exts: null });
+      tabs = [first];
+      activeTabId = first.id;
+    }
+    loadTabIntoUI(getActiveTab() || tabs[0], { skipExt: true });
   }
 
   /* ---------- 编辑辅助 ---------- */
@@ -1404,6 +1608,8 @@ const MD = (function () {
   function onInput() {
     scheduleRender();
     queueAutosave();
+    const t = getActiveTab();
+    if (t) { t.dirty = true; markTabDirty(t); }
     if (currentFile.name) {
       statusText.textContent = '已修改 · ' + currentFile.name;
     }
@@ -1550,6 +1756,7 @@ const MD = (function () {
         await w.write(content);
         await w.close();
         currentFile.name = handle.name;
+        markSaved(handle.name);
         statusText.textContent = '已保存 · ' + handle.name;
         toast('已保存到 ' + handle.name);
         return;
@@ -1558,35 +1765,55 @@ const MD = (function () {
       }
     }
     download(name, content, 'text/markdown;charset=utf-8');
+    markSaved(name);
     statusText.textContent = '已导出 · ' + name;
     toast('已下载 ' + name);
   }
+  function markSaved(filename) {
+    const t = getActiveTab();
+    if (t) { t.filename = filename; t.dirty = false; t.exts = activeExtensionNames(); }
+    renderTabs();
+  }
   document.getElementById('btnSave').onclick = saveFile;
 
+  // 打开一份文档 = 新建一个标签页（而不是覆盖当前文档）
   function loadText(text, filename) {
     const meta = parseExtMeta(text);
-    editor.value = meta.clean;
+    const exts = meta.list === null ? null
+      : meta.list.map(function (d) { return d && d.name; }).filter(Boolean);
+    const title = filename ? filename.replace(/\.(md|markdown|mdown|txt)$/i, '') : '未命名文档';
     if (filename) {
-      titleInput.value = filename.replace(/\.(md|markdown|mdown|txt)$/i, '');
-      currentFile.name = filename;
+      const existing = tabs.filter(function (t) { return t.filename === filename; })[0];
+      if (existing) { activateTab(existing.id); toast('「' + filename + '」已在标签页中打开'); return; }
     }
-    applyDocExtensions(meta.list);   // 按文档声明的扩展设置启用状态并刷新预览
+    const t = makeTab({ content: meta.clean, title: title, filename: filename || null, exts: exts });
+    tabs.push(t);
+    switchToTab(t);   // 内部会按该文档的扩展声明重新装载扩展
     const names = activeExtensionNames();
     statusText.textContent = '已打开 · ' + (names.length ? ('使用扩展：' + names.join('、')) : '未使用扩展');
+    toast('已打开 ' + (filename || title));
     persist();
+  }
+
+  // 顺序读取，保证多文件按选择顺序生成标签
+  function openFiles(fileList) {
+    const files = Array.prototype.slice.call(fileList || []);
+    let i = 0;
+    (function next() {
+      if (i >= files.length) return;
+      const f = files[i++];
+      const reader = new FileReader();
+      reader.onload = function () { loadText(String(reader.result), f.name); next(); };
+      reader.onerror = function () { toast('读取失败：' + f.name); next(); };
+      reader.readAsText(f, 'utf-8');
+    })();
   }
 
   const fileInput = document.getElementById('fileInput');
   document.getElementById('btnOpen').onclick = function () { fileInput.click(); };
   fileInput.onchange = function () {
-    const f = fileInput.files && fileInput.files[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = function () {
-      loadText(String(reader.result), f.name);
-      toast('已打开 ' + f.name);
-    };
-    reader.readAsText(f, 'utf-8');
+    const files = fileInput.files ? Array.prototype.slice.call(fileInput.files) : [];
+    openFiles(files);
     fileInput.value = '';
   };
 
@@ -1607,14 +1834,8 @@ const MD = (function () {
     e.preventDefault();
     dragDepth = 0;
     dropHint.classList.remove('show');
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (!f) return;
-    const reader = new FileReader();
-    reader.onload = function () {
-      loadText(String(reader.result), f.name);
-      toast('已打开 ' + f.name);
-    };
-    reader.readAsText(f, 'utf-8');
+    const files = e.dataTransfer && e.dataTransfer.files ? Array.prototype.slice.call(e.dataTransfer.files) : [];
+    if (files.length) openFiles(files);
   });
 
   /* ---------- 导出 HTML ---------- */
@@ -1785,10 +2006,19 @@ const MD = (function () {
     try { divider.releasePointerCapture(e.pointerId); } catch (err) {}
   });
 
-  /* ---------- 标题变化 ---------- */
-  titleInput.addEventListener('input', queueAutosave);
+  /* ---------- 标题变化（同步到当前标签） ---------- */
+  titleInput.addEventListener('input', function () {
+    const t = getActiveTab();
+    if (t) { t.title = titleInput.value; t.dirty = true; }
+    renderTabs();
+    queueAutosave();
+  });
   titleInput.addEventListener('blur', function () {
     if (!titleInput.value.trim()) titleInput.value = '未命名文档';
+    const t = getActiveTab();
+    if (t) t.title = titleInput.value;
+    renderTabs();
+    queueAutosave();
   });
 
   /* ---------- 全局快捷键 ---------- */
@@ -1797,6 +2027,19 @@ const MD = (function () {
     if (mod && e.key.toLowerCase() === 's') { e.preventDefault(); saveFile(); }
     if (mod && e.key.toLowerCase() === 'p') { /* 交给浏览器打印 */ }
     if (e.key === 'Escape') { outlineBox.classList.remove('show'); mathMenu.classList.remove('show'); }
+    // Alt + ←/→ 切换标签，Alt + W 关闭当前标签
+    if (e.altKey && !mod && !e.shiftKey) {
+      const k = e.key.toLowerCase();
+      const idx = tabs.findIndex(function (x) { return x.id === activeTabId; });
+      if ((k === 'arrowright' || k === 'arrowleft') && idx >= 0 && tabs.length > 1) {
+        e.preventDefault();
+        const n = k === 'arrowright' ? (idx + 1) % tabs.length : (idx - 1 + tabs.length) % tabs.length;
+        activateTab(tabs[n].id);
+      } else if (k === 'w' && idx >= 0) {
+        e.preventDefault();
+        closeTab(activeTabId);
+      }
+    }
   });
 
   /* ---------- 扩展系统 ---------- */
@@ -1847,6 +2090,12 @@ const MD = (function () {
   }
   function activeExtensionNames() {
     return extensions.filter(function (e) { return e.enabled && !e.error; }).map(function (e) { return e.name; });
+  }
+  // 用户在扩展面板手动启停后，把结果记入当前文档标签并持久化
+  function rememberTabExts() {
+    const t = getActiveTab();
+    if (t) t.exts = activeExtensionNames();
+    persist();
   }
 
   // 扩展可使用的上下文
@@ -2074,7 +2323,7 @@ const MD = (function () {
     const reader = new FileReader();
     reader.onload = function () {
       const ext = importExtension(String(reader.result), f.name);
-      if (ext && !ext.error) toast('已导入扩展：' + ext.name);
+      if (ext && !ext.error) { rememberTabExts(); toast('已导入扩展：' + ext.name); }
       else if (ext && ext.error) toast('扩展导入失败：' + ext.error);
     };
     reader.readAsText(f, 'utf-8');
@@ -2087,6 +2336,7 @@ const MD = (function () {
       extensions = extensions.filter(function (x) { return x.id !== id; });
       persistExtensions();
       loadExtensions();
+      rememberTabExts();
       return;
     }
     const chk = e.target.closest('.ext-toggle input');
@@ -2095,6 +2345,7 @@ const MD = (function () {
       extensions.forEach(function (x) { if (x.id === id) x.enabled = chk.checked; });
       persistExtensions();
       loadExtensions();
+      rememberTabExts();
     }
   });
   window.addEventListener('keydown', function (e) {
@@ -2108,9 +2359,10 @@ const MD = (function () {
   /* ---------- 初始化 ---------- */
   setTheme(localStorage.getItem(THEME_KEY) || (window.matchMedia &&
     window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
-  restore();
   readExtensions();   // 从 localStorage 还原扩展到内存数组
-  loadExtensions();
+  restore();          // 还原工作区标签，并把活动标签内容载入编辑器
+  applyExtForTab(getActiveTab(), true);  // 按活动标签的扩展声明装载扩展
+  renderTabs();
   doRender();
 })();
 </script>

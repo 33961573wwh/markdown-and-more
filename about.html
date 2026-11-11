@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A Boat · 功能介绍</title>
-<meta name="description" content="A Boat 是一个塞进单个 HTML 文件的离线 Markdown 编辑器：分屏预览、公式、大纲、自动保存，还能用 .mext 扩展长出新语法。">
+<meta name="description" content="A Boat 是一个塞进单个 HTML 文件的离线 Markdown 编辑器：分屏预览、公式、大纲、自动保存，还能用 .mext 扩展写出几何图、统计图、Mermaid 流程图与思维导图。">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23c2410c'/%3E%3Ctext x='16' y='23' font-size='19' font-family='-apple-system,Segoe UI,sans-serif' font-weight='700' fill='%23fff' text-anchor='middle'%3EA%3C/text%3E%3C/svg%3E">
 <style>
   :root{
@@ -178,7 +178,7 @@
   section{padding:64px 0 0}
   .sec-head{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:30px;padding-bottom:18px;border-bottom:1px solid var(--line)}
   .sec-head h2{margin:0;font-size:clamp(21px,2.4vw,26px);font-weight:600;letter-spacing:-.01em}
-  .sec-head p{margin:6px 0 0;font-size:13.5px;color:var(--muted);max-width:52ch}
+  .sec-head p{margin:6px 0 0;font-size:13.5px;color:var(--muted);max-width:56ch}
   .sec-no{font-family:var(--font-mono);font-size:11px;color:var(--muted);letter-spacing:.1em;white-space:nowrap}
 
   .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
@@ -198,6 +198,56 @@
   .card .meta{
     margin-top:14px;padding-top:12px;border-top:1px dashed var(--line);
     font-size:11.5px;color:var(--muted);font-family:var(--font-mono);
+  }
+  .card code,.sec-head code,.note code,.step code,.ext-table code,.demo-note code{
+    font-family:var(--font-mono);font-size:.92em;background:var(--bg-soft);
+    padding:1px 5px;border-radius:4px;color:var(--accent);
+  }
+
+  /* ---------- 图形演示 ---------- */
+  .demo{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r-lg);
+    box-shadow:var(--shadow-sm);overflow:hidden;margin-bottom:20px;
+  }
+  .demo-head{
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    padding:11px 18px;border-bottom:1px solid var(--line);background:var(--panel-2);
+  }
+  .demo-tag{
+    display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:600;color:var(--text);
+  }
+  .demo-badge{
+    font-family:var(--font-mono);font-size:10.5px;color:var(--accent);
+    background:var(--accent-soft);border:1px solid rgba(var(--accent-rgb),.2);
+    padding:2px 8px;border-radius:99px;
+  }
+  .demo-file{margin-left:auto;font-family:var(--font-mono);font-size:11px;color:var(--muted)}
+  pre.demo-code{
+    margin:0;padding:14px 18px;background:var(--panel-2);border-bottom:1px solid var(--line);
+    font-family:var(--font-mono);font-size:11.5px;line-height:1.8;color:var(--text-soft);
+    overflow:auto;white-space:pre;
+  }
+  pre.demo-code .k{color:var(--accent);font-weight:600}
+  pre.demo-code .s{color:var(--green)}
+  pre.demo-code .c{color:var(--muted);font-style:italic}
+  pre.demo-code .n{color:var(--blue)}
+  .demo-stage{padding:16px;background:var(--panel)}
+  .demo-stage .flw-figure,.demo-stage .mind-figure{margin:0}
+  .demo-stage .flw-figure svg,.demo-stage .mind-figure svg{max-width:100%}
+  .demo-note{margin:0;padding:10px 18px 13px;font-size:12px;color:var(--muted);border-top:1px solid var(--line)}
+
+  .fig-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:22px}
+  .fig-card{
+    background:var(--panel);border:1px solid var(--line);border-radius:var(--r-md);
+    padding:18px 18px 20px;box-shadow:var(--shadow-sm);
+  }
+  .fig-card .fi{font-size:20px;line-height:1;margin-bottom:10px;display:block}
+  .fig-card h3{margin:0 0 6px;font-size:14px;font-weight:600}
+  .fig-card p{margin:0;font-size:12.5px;color:var(--text-soft);line-height:1.7}
+  .fig-card code{
+    display:block;margin-top:10px;font-family:var(--font-mono);font-size:10.5px;
+    color:var(--muted);background:var(--panel-2);border:1px solid var(--line);
+    border-radius:6px;padding:6px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   }
 
   /* ---------- 结构图 ---------- */
@@ -241,11 +291,16 @@
     text-align:left;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);
     font-weight:500;padding:12px 16px;border-bottom:1px solid var(--line-strong);background:var(--panel-2);
   }
-  .ext-table td{padding:13px 16px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--text-soft)}
+  .ext-table td{padding:12px 16px;border-bottom:1px solid var(--line);vertical-align:top;color:var(--text-soft)}
   .ext-table tr:last-child td{border-bottom:0}
   .ext-table tr:hover td{background:var(--panel-2)}
   .ext-table .fname{font-family:var(--font-mono);font-size:11.5px;color:var(--accent);white-space:nowrap}
   .ext-table b{color:var(--text);font-weight:500}
+  .ext-table tr.group td{
+    background:var(--accent-soft);color:var(--accent);font-size:11.5px;font-weight:600;
+    letter-spacing:.06em;padding:8px 16px;border-bottom:1px solid var(--line);
+  }
+  .ext-table tr.group:hover td{background:var(--accent-soft)}
 
   .ext-body{display:grid;grid-template-columns:1fr 1.05fr;gap:26px;margin-top:22px;align-items:start}
   .api-list{list-style:none;margin:0;padding:0;font-size:13px}
@@ -280,13 +335,12 @@
   }
   .step h3{margin:0 0 8px;font-size:14.5px;font-weight:600}
   .step p{margin:0;font-size:13px;color:var(--text-soft)}
-  .step code{font-family:var(--font-mono);font-size:11.5px;background:var(--bg-soft);padding:1px 5px;border-radius:4px;color:var(--accent)}
 
   /* ---------- 页脚 ---------- */
   footer{margin-top:80px;border-top:1px solid var(--line);padding:34px 0 46px;background:var(--bg-soft)}
   .foot-inner{max-width:var(--max);margin:0 auto;padding:0 28px;display:flex;gap:28px;justify-content:space-between;flex-wrap:wrap;align-items:flex-start}
   .foot-inner p{margin:0;font-size:12.5px;color:var(--muted);max-width:44ch;line-height:1.85}
-  .foot-links{display:flex;gap:8px;flex-wrap:wrap}
+  .foot-links{display:flex;gap:8px;flex-wrap:wrap;max-width:62ch}
   .foot-links a{
     font-size:12px;font-family:var(--font-mono);color:var(--text-soft);
     border:1px solid var(--line);background:var(--panel);padding:6px 11px;border-radius:8px;transition:.2s;
@@ -299,18 +353,67 @@
   @media (max-width:900px){
     .hero{grid-template-columns:1fr;gap:36px;padding-top:52px}
     .grid,.steps{grid-template-columns:1fr 1fr}
+    .fig-grid{grid-template-columns:1fr 1fr}
     .keys-wrap,.ext-body{grid-template-columns:1fr}
     .nav-links{display:none}
   }
   @media (max-width:620px){
     .wrap,.nav-inner,.foot-inner{padding:0 18px}
-    .grid,.steps{grid-template-columns:1fr}
+    .grid,.steps,.fig-grid{grid-template-columns:1fr}
     .mock-body{grid-template-columns:1fr}
     .mock-src{border-right:0;border-bottom:1px solid var(--line)}
     .stats li{padding-right:16px;margin-right:16px}
     .sec-head{flex-direction:column;align-items:flex-start;gap:8px}
     .hero-actions .btn{flex:1;justify-content:center}
+    .demo-file{margin-left:0}
   }
+</style>
+<style id="demo-ext-style">
+.flw-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden}
+.flw-figure svg{display:block;width:100%;height:auto;margin:0 auto}
+.flw-bg{fill:var(--panel,#fff)}
+.flw-node{fill:var(--panel-2,#faf9f6);stroke:var(--line-strong,#d8d3c8);stroke-width:1.4}
+.flw-node-accent{fill:var(--accent-soft,#fdf1e9);stroke:var(--accent,#c2410c)}
+.flw-node-t{fill:var(--text,#221f1b);font:12.5px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}
+.flw-edge{fill:none;stroke:var(--line-strong,#d8d3c8);stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.flw-arrow{fill:var(--line-strong,#d8d3c8);stroke:none}
+.flw-elabel-bg{fill:var(--panel,#fff)}
+.flw-elabel{fill:var(--text-soft,#4a453f);font:11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}
+.flw-sub{fill:none;stroke:var(--line,#e6e2da);stroke-width:1.2;stroke-dasharray:5 4}
+.flw-sub-t{fill:var(--muted,#8d8880);font:600 11px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}
+.flw-cap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}
+.flw-cap p{margin:0}
+.flw-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}
+.flw-errbox b{font-weight:650}
+.flw-errbox code{font-family:var(--font-mono,Consolas,monospace)}
+.flw-picker{display:flex;flex-direction:column;gap:.8em;max-height:62vh;overflow:auto;padding-right:4px}
+.flw-picker .flw-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}
+.flw-picker .flw-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4rem}
+.flw-picker .flw-grid2 button{justify-content:flex-start;text-align:left}
+.flw-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}
+.mind-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden;
+  --mind-c1:#c2410c;--mind-c2:#0e7490;--mind-c3:#7c3aed;--mind-c4:#15803d;
+  --mind-c5:#b45309;--mind-c6:#be185d;--mind-c7:#1d4ed8;--mind-c8:#4d7c0f}
+html[data-theme="dark"] .mind-figure,html[data-theme="graphite"] .mind-figure{
+  --mind-c1:#ff8a4c;--mind-c2:#38bdf8;--mind-c3:#a78bfa;--mind-c4:#4ade80;
+  --mind-c5:#fbbf24;--mind-c6:#f472b6;--mind-c7:#60a5fa;--mind-c8:#a3e635}
+.mind-figure svg{display:block;width:100%;height:auto;margin:0 auto}
+.mind-bg{fill:var(--panel,#fff)}
+.mind-link{fill:none;stroke-linecap:round;stroke-linejoin:round}
+.mind-root{fill:var(--accent,#c2410c);stroke:none}
+.mind-root-t{fill:var(--panel,#fff);font:600 14px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}
+.mind-node-t{fill:var(--text,#221f1b);font:600 12.5px var(--font-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif)}
+.mind-leaf-t{fill:var(--text-soft,#4a453f);font:12px var(--font-ui,-apple-system,"PingFang SC",sans-serif)}
+.mind-shape{fill:var(--panel-2,#faf9f6)}
+.mind-cap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}
+.mind-cap p{margin:0}
+.mind-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}
+.mind-errbox b{font-weight:650}
+.mind-picker{display:flex;flex-direction:column;gap:.8em;max-height:62vh;overflow:auto;padding-right:4px}
+.mind-picker .mind-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}
+.mind-picker .mind-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:.4rem}
+.mind-picker .mind-grid2 button{justify-content:flex-start;text-align:left}
+.mind-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}
 </style>
 </head>
 <body>
@@ -324,6 +427,7 @@
     </a>
     <nav class="nav-links" id="navLinks">
       <a href="#features">能力</a>
+      <a href="#diagrams">图表</a>
       <a href="#arch">结构</a>
       <a href="#keys">快捷键</a>
       <a href="#ext">扩展</a>
@@ -348,20 +452,20 @@
         <h1>打开就能写，<br>关掉还在。<em>一苇可航。</em></h1>
         <p class="lede">
           A Boat 是一个塞进单个 HTML 文件的 Markdown 编辑器。不装软件、不连网络、不上传一个字，
-          双击打开即用；公式、表格、大纲、七套主题全部自带。
+          双击打开即用；公式、表格、大纲、七套主题自带，还能把几何图、统计图和 Mermaid 图直接写进正文。
         </p>
         <div class="hero-actions">
           <a class="btn primary lg" href="index.html">
             开始写作
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h13M13 6l6 6-6 6"/></svg>
           </a>
-          <a class="btn lg" href="#features">先看看它能做什么</a>
+          <a class="btn lg" href="#diagrams">看看能画什么图</a>
         </div>
         <ul class="stats">
-          <li><b>731 KB</b><small>单个 HTML</small></li>
+          <li><b>718 KB</b><small>单个 HTML</small></li>
           <li><b>0</b><small>外部依赖</small></li>
           <li><b>7 套</b><small>主题配色</small></li>
-          <li><b>4 个</b><small>随附扩展</small></li>
+          <li><b>8 个</b><small>随附扩展</small></li>
         </ul>
       </div>
 
@@ -429,7 +533,7 @@
         <article class="card rv">
           <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z"/><path d="M14 3v5h5"/></svg></div>
           <h3>随时带走</h3>
-          <p><kbd>Ctrl</kbd><kbd>S</kbd> 存成 <code>.md</code>；「导出 HTML」生成独立单文件，排版、公式字体、代码配色、扩展样式一起打包。</p>
+          <p><kbd>Ctrl</kbd><kbd>S</kbd> 存成 <code>.md</code>；「导出 HTML」生成独立单文件，排版、公式字体、代码配色、扩展注入的 SVG 一起打包。</p>
           <p>想打印？打印样式只输出正文，顶栏和编辑区自动隐藏。</p>
           <div class="meta">.md 保存 · 独立 HTML · 打印友好</div>
         </article>
@@ -438,18 +542,87 @@
           <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="9" r="2.4"/><path d="M7 19c1.4-2.6 3-3.6 5-3.6s3.6 1 5 3.6"/></svg></div>
           <h3>七套主题</h3>
           <p>晴川、琥珀、青松、碧海、绯樱、夜航、石墨。每套都有独立的强调色、选区、高亮与代码底纹，选完记在本机。</p>
-          <p>暗色主题下代码高亮与公式也跟着换色，不是简单反相。</p>
-          <div class="meta">7 主题 · 记忆选择 · 高亮联动</div>
+          <p>暗色主题下代码高亮、公式和图形扩展也跟着换色，不是简单反相。</p>
+          <div class="meta">7 主题 · 记忆选择 · 图形联动</div>
         </article>
 
         <article class="card rv">
           <div class="ico"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/></svg></div>
           <h3>能长出新语法</h3>
           <p>一个 <code>.mext</code> 文件就是一段 JS，导入后即可改写解析规则、往工具栏加按钮、注册快捷键。</p>
-          <p>不想用了随时停用，扩展注入的样式会被一起清理干净。</p>
+          <p>随附 8 个扩展：容器块、Emoji、代码高亮、洛谷题面、几何图、统计图、流程图、思维导图。</p>
           <div class="meta">.mext 扩展 · 热导入 · 可停用</div>
         </article>
       </div>
+    </section>
+
+    <!-- 图表 -->
+    <section id="diagrams">
+      <div class="sec-head rv">
+        <div>
+          <h2>把图画进正文</h2>
+          <p>图形不靠截图。写几行文字，预览里就是可缩放的 SVG；导出的 HTML 里图也还在。</p>
+        </div>
+        <span class="sec-no">02 / 图表</span>
+      </div>
+
+      <div class="demo rv">
+        <div class="demo-head">
+          <span class="demo-tag">🔀 流程图</span>
+          <span class="demo-badge">Mermaid 语法</span>
+          <span class="demo-file">ext-flowchart.mext</span>
+        </div>
+        <pre class="demo-code"><span class="c">```mermaid</span>
+<span class="k">flowchart TD</span>
+  A([开始写作]) --&gt; B[Markdown 正文]
+  B --&gt; C{需要配图?}
+  C --&gt;|<span class="s">是</span>| D[挑一个图形扩展]
+  D --&gt; E[写 Mermaid / DSL]
+  E --&gt; F[实时 SVG 预览]
+  F --&gt; G([导出 HTML])
+  C --&gt;|<span class="s">否</span>| F
+<span class="c">```</span></pre></pre>
+        <div class="demo-stage"><div class="flw-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 202 639" width="202" height="639" style="max-width:202px" role="img" aria-label="流程图" preserveAspectRatio="xMidYMid meet"><title>流程图</title><rect class="flw-bg" x="0" y="0" width="202" height="639"/><g transform="translate(100.8,30)"><path class="flw-edge" d="M 0 38 C 0 64, 0 64, 0 90"/><path class="flw-arrow" d="M 0 90 L -3.8 81.5 L 3.8 81.5 Z"/><path class="flw-edge" d="M 0 126 C 0 152, 0 152, 0 178"/><path class="flw-arrow" d="M 0 178 L -3.8 169.5 L 3.8 169.5 Z"/><path class="flw-edge" d="M 0 225 C 0 251, 0 251, 0 277"/><rect class="flw-elabel-bg" x="-12.4" y="241" width="24.8" height="20" rx="4"/><text class="flw-elabel" x="0" y="255" text-anchor="middle"><tspan x="0">是</tspan></text><path class="flw-arrow" d="M 0 277 L -3.8 268.5 L 3.8 268.5 Z"/><path class="flw-edge" d="M 0 313 C 0 339, 0 339, 0 365"/><path class="flw-arrow" d="M 0 365 L -3.8 356.5 L 3.8 356.5 Z"/><path class="flw-edge" d="M 0 401 C 0 427, 0 427, 0 453"/><path class="flw-arrow" d="M 0 453 L -3.8 444.5 L 3.8 444.5 Z"/><path class="flw-edge" d="M 0 489 C 0 515, 0 515, 0 541"/><path class="flw-arrow" d="M 0 541 L -3.8 532.5 L 3.8 532.5 Z"/><path class="flw-edge" d="M 0 225 C 0 339, 0 339, 0 453"/><rect class="flw-elabel-bg" x="-12.4" y="329" width="24.8" height="20" rx="4"/><text class="flw-elabel" x="0" y="343" text-anchor="middle"><tspan x="0">否</tspan></text><path class="flw-arrow" d="M 0 453 L -3.8 444.5 L 3.8 444.5 Z"/><rect class="flw-node flw-node-accent" x="-42.4" y="0" width="84.8" height="38" rx="19"/><text class="flw-node-t" x="0" y="23.5" text-anchor="middle"><tspan x="0">开始写作</tspan></text><rect class="flw-node" x="-60.15" y="90" width="120.3" height="36" rx="3"/><text class="flw-node-t" x="0" y="112.5" text-anchor="middle"><tspan x="0">Markdown 正文</tspan></text><path class="flw-node" d="M 0 178 L 62.95 201.5 L 0 225 L -62.95 201.5 Z"/><text class="flw-node-t" x="0" y="206" text-anchor="middle"><tspan x="0">需要配图?</tspan></text><rect class="flw-node" x="-63.7" y="277" width="127.4" height="36" rx="3"/><text class="flw-node-t" x="0" y="299.5" text-anchor="middle"><tspan x="0">挑一个图形扩展</tspan></text><rect class="flw-node" x="-70.8" y="365" width="141.6" height="36" rx="3"/><text class="flw-node-t" x="0" y="387.5" text-anchor="middle"><tspan x="0">写 Mermaid / DSL</tspan></text><rect class="flw-node" x="-60.15" y="453" width="120.3" height="36" rx="3"/><text class="flw-node-t" x="0" y="475.5" text-anchor="middle"><tspan x="0">实时 SVG 预览</tspan></text><rect class="flw-node flw-node-accent" x="-45.95" y="541" width="91.9" height="38" rx="19"/><text class="flw-node-t" x="0" y="564.5" text-anchor="middle"><tspan x="0">导出 HTML</tspan></text></g></svg></div></div>
+        <p class="demo-note">支持 <code>TD / LR / BT / RL</code> 方向、八种节点形状、带标签与虚线连线、<code>subgraph</code> 分组、<code>classDef</code> 着色；自动分层布局，回边绕到侧边，语法写错逐行提示。</p>
+      </div>
+
+      <div class="demo rv">
+        <div class="demo-head">
+          <span class="demo-tag">🧠 思维导图</span>
+          <span class="demo-badge">Mermaid / Markdown</span>
+          <span class="demo-file">ext-mindmap.mext</span>
+        </div>
+        <pre class="demo-code"><span class="c">```mindmap</span>
+<span class="k">mindmap</span>
+  root((A Boat))
+    写作
+      分屏预览
+      自动保存
+      大纲跳转
+    图形
+      几何作图
+      统计图
+      流程图
+      思维导图
+    输出
+      导出 HTML
+      打印
+<span class="c">```</span></pre>
+        <div class="demo-stage"><div class="mind-figure"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 646 254" width="646" height="254" style="max-width:646px" role="img" aria-label="思维导图" preserveAspectRatio="xMidYMid meet"><title>A Boat</title><rect class="mind-bg" x="0" y="0" width="646" height="254"/><g transform="translate(319.4,127)"><path class="mind-link" d="M 48.8 0 C 76.8 0, 76.8 -40, 104.8 -40" style="stroke:var(--mind-c1,#c2410c);stroke-width:3.2"/><path class="mind-link" d="M 160 -40 C 188 -40, 188 -80, 216 -80" style="stroke:var(--mind-c1,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M 160 -40 C 188 -40, 188 -40, 216 -40" style="stroke:var(--mind-c1,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M 160 -40 C 188 -40, 188 0, 216 0" style="stroke:var(--mind-c1,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M -48.8 0 C -76.8 0, -76.8 0, -104.8 0" style="stroke:var(--mind-c2,#c2410c);stroke-width:3.2"/><path class="mind-link" d="M -160 0 C -188 0, -188 -60, -216 -60" style="stroke:var(--mind-c2,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M -160 0 C -188 0, -188 -20, -216 -20" style="stroke:var(--mind-c2,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M -160 0 C -188 0, -188 20, -216 20" style="stroke:var(--mind-c2,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M -160 0 C -188 0, -188 60, -216 60" style="stroke:var(--mind-c2,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M 48.8 0 C 76.8 0, 76.8 60, 104.8 60" style="stroke:var(--mind-c3,#c2410c);stroke-width:3.2"/><path class="mind-link" d="M 160 60 C 188 60, 188 40, 216 40" style="stroke:var(--mind-c3,#c2410c);stroke-width:2.2"/><path class="mind-link" d="M 160 60 C 188 60, 188 80, 216 80" style="stroke:var(--mind-c3,#c2410c);stroke-width:2.2"/><rect class="mind-root" x="-48.8" y="-38.06" width="97.6" height="76.13" rx="16"/><text class="mind-root-t" x="0" y="5" text-anchor="middle"><tspan x="0">A Boat</tspan></text><rect x="104.8" y="-56.5" width="55.2" height="33" rx="10" style="fill:var(--mind-c1,#c2410c);fill-opacity:.12;stroke:var(--mind-c1,#c2410c);stroke-width:1.6"/><text class="mind-node-t" x="132.4" y="-35.5" text-anchor="middle"><tspan x="132.4">写作</tspan></text><path class="mind-link" d="M 219 -68 L 283.4 -68" style="stroke:var(--mind-c1,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="251.2" y="-75.5" text-anchor="middle"><tspan x="251.2">分屏预览</tspan></text><path class="mind-link" d="M 219 -28 L 283.4 -28" style="stroke:var(--mind-c1,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="251.2" y="-35.5" text-anchor="middle"><tspan x="251.2">自动保存</tspan></text><path class="mind-link" d="M 219 12 L 283.4 12" style="stroke:var(--mind-c1,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="251.2" y="4.5" text-anchor="middle"><tspan x="251.2">大纲跳转</tspan></text><rect x="-160" y="-16.5" width="55.2" height="33" rx="10" style="fill:var(--mind-c2,#c2410c);fill-opacity:.12;stroke:var(--mind-c2,#c2410c);stroke-width:1.6"/><text class="mind-node-t" x="-132.4" y="4.5" text-anchor="middle"><tspan x="-132.4">图形</tspan></text><path class="mind-link" d="M -283.4 -48 L -219 -48" style="stroke:var(--mind-c2,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="-251.2" y="-55.5" text-anchor="middle"><tspan x="-251.2">几何作图</tspan></text><path class="mind-link" d="M -269.8 -8 L -219 -8" style="stroke:var(--mind-c2,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="-244.4" y="-15.5" text-anchor="middle"><tspan x="-244.4">统计图</tspan></text><path class="mind-link" d="M -269.8 32 L -219 32" style="stroke:var(--mind-c2,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="-244.4" y="24.5" text-anchor="middle"><tspan x="-244.4">流程图</tspan></text><path class="mind-link" d="M -283.4 72 L -219 72" style="stroke:var(--mind-c2,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="-251.2" y="64.5" text-anchor="middle"><tspan x="-251.2">思维导图</tspan></text><rect x="104.8" y="43.5" width="55.2" height="33" rx="10" style="fill:var(--mind-c3,#c2410c);fill-opacity:.12;stroke:var(--mind-c3,#c2410c);stroke-width:1.6"/><text class="mind-node-t" x="132.4" y="64.5" text-anchor="middle"><tspan x="132.4">输出</tspan></text><path class="mind-link" d="M 219 52 L 290.2 52" style="stroke:var(--mind-c3,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="254.6" y="44.5" text-anchor="middle"><tspan x="254.6">导出 HTML</tspan></text><path class="mind-link" d="M 219 92 L 261 92" style="stroke:var(--mind-c3,#c2410c);stroke-width:1.3;opacity:.55"/><text class="mind-leaf-t" x="240" y="84.5" text-anchor="middle"><tspan x="240">打印</tspan></text></g></svg></div></div>
+        <p class="demo-note">根节点居中，一级分支按高度自动分到左右两侧，每个分支一种颜色；除 Mermaid 缩进树外，也认 <code># 标题</code> 与 <code>- 列表</code> 的 markmap 写法，网上复制的导图可以直接粘。</p>
+      </div>
+
+      <div class="fig-grid">
+        <div class="fig-card rv"><span class="fi">📐</span><h3>几何作图</h3><p>定义点后连线、画圆、标角，自动生成等比 SVG；支持派生点与安全表达式。</p><code>```geometry</code></div>
+        <div class="fig-card rv"><span class="fi">📊</span><h3>统计图</h3><p>柱状、折线、饼图、散点、雷达、直方图、热力图、漏斗、箱线等 12 类图表。</p><code>```chart bar</code></div>
+        <div class="fig-card rv"><span class="fi">🔀</span><h3>流程图</h3><p>Mermaid flowchart / graph 兼容，方向、形状、分支、分组、样式全覆盖。</p><code>```mermaid · flowchart TD</code></div>
+        <div class="fig-card rv"><span class="fi">🧠</span><h3>思维导图</h3><p>Mermaid mindmap 与 Markdown 层级双语法，双侧平衡树布局。</p><code>```mindmap · # 标题</code></div>
+      </div>
+
+      <p class="note rv">
+        四个图形扩展输出的都是<strong>纯内联 SVG</strong>，不引用外部脚本或字体，明暗主题自动换色，导出 HTML 也不会丢图。
+        工具栏各自带模板面板与语法速查（<kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>G/C/F/M</kbd>），不必背语法；写错的行会就地列出原因，不影响其余图形。
+      </p>
     </section>
 
     <!-- 结构 -->
@@ -459,7 +632,7 @@
           <h2>里面是什么</h2>
           <p>整个编辑器就是一层解析器加三层界面，扩展从底部插进来，不碰主干。</p>
         </div>
-        <span class="sec-no">02 / 结构</span>
+        <span class="sec-no">03 / 结构</span>
       </div>
 
       <div class="arch rv">
@@ -498,8 +671,8 @@
           <path class="d-acc" d="M340 300 L340 268" fill="none" stroke-width="1.4" marker-end="url(#ar)"/>
 
           <rect class="d-box" x="40" y="302" width="600" height="56" rx="12" stroke-width="0.8"/>
-          <text class="t-1" x="340" y="323" text-anchor="middle">扩展层 · .mext 插件</text>
-          <text class="t-2" x="340" y="342" text-anchor="middle">ctx.md 自定义语法 · ctx.ui 工具按钮 · ctx.app 文档读写</text>
+          <text class="t-1" x="340" y="323" text-anchor="middle">扩展层 · 8 个 .mext 插件</text>
+          <text class="t-2" x="340" y="342" text-anchor="middle">排版增强（容器 / 高亮 / 洛谷 / Emoji） · 图形图表（几何 / 统计 / 流程 / 导图）</text>
         </svg>
       </div>
     </section>
@@ -509,9 +682,9 @@
       <div class="sec-head rv">
         <div>
           <h2>手不用离开键盘</h2>
-          <p>Windows 用 Ctrl，macOS 用 ⌘，两套都认。</p>
+          <p>Windows 用 Ctrl，macOS 用 ⌘，两套都认；图形扩展另有四个插入骨架的快捷键。</p>
         </div>
-        <span class="sec-no">03 / 快捷键</span>
+        <span class="sec-no">04 / 快捷键</span>
       </div>
 
       <div class="keys-wrap">
@@ -530,14 +703,15 @@
             <tr><td>公式面板</td><td><kbd>Ctrl</kbd><kbd>M</kbd></td></tr>
             <tr><td>保存 .md</td><td><kbd>Ctrl</kbd><kbd>S</kbd></td></tr>
             <tr><td>打开文件</td><td><kbd>Ctrl</kbd><kbd>O</kbd></td></tr>
-            <tr><td>整体缩进</td><td><kbd>Tab</kbd></td></tr>
-            <tr><td>取消缩进</td><td><kbd>Shift</kbd><kbd>Tab</kbd></td></tr>
-            <tr><td>关闭浮层</td><td><kbd>Esc</kbd></td></tr>
+            <tr><td>插入几何图骨架</td><td><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>G</kbd></td></tr>
+            <tr><td>插入统计图骨架</td><td><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>C</kbd></td></tr>
+            <tr><td>插入流程 / 导图骨架</td><td><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>F</kbd> <kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>M</kbd></td></tr>
           </table>
         </div>
       </div>
       <p class="note rv">
         列表里按 <kbd>Enter</kbd> 会自动续写下一项，有序列表自动加一、任务列表自动补上空框；在空项上再按一次 <kbd>Enter</kbd> 就退出列表。引用行同理。
+        整体缩进用 <kbd>Tab</kbd> / <kbd>Shift</kbd><kbd>Tab</kbd>，关闭浮层用 <kbd>Esc</kbd>。
       </p>
     </section>
 
@@ -546,9 +720,9 @@
       <div class="sec-head rv">
         <div>
           <h2>扩展是怎么接进来的</h2>
-          <p>同目录下已经备好四个扩展，导入即用；想自己写，读一遍下面的骨架就够。</p>
+          <p>同目录下已经备好 8 个扩展，导入即用；想自己写，读一遍下面的骨架就够。</p>
         </div>
-        <span class="sec-no">04 / 扩展</span>
+        <span class="sec-no">05 / 扩展</span>
       </div>
 
       <table class="ext-table rv">
@@ -556,10 +730,11 @@
           <tr><th>文件</th><th>能力</th><th>说明</th></tr>
         </thead>
         <tbody>
+          <tr class="group"><td colspan="3">排版与语法增强</td></tr>
           <tr>
-            <td class="fname">ext-luogu.mext</td>
+            <td class="fname">ext-luogu-261108.mext</td>
             <td><b>洛谷新特性</b></td>
-            <td>折叠框（四级、可嵌套、可默认展开）、居中居右、引言、Tuack 表格、<code>^</code>/<code>&lt;</code> 合并单元格、代码行号与区间高亮，附中文模板面板。</td>
+            <td>折叠框（四级、可嵌套）、居中居右、引言、书版 Tuack 表格、<code>^</code>/<code>&lt;</code> 合并单元格、代码行号与区间高亮，附中文模板面板。</td>
           </tr>
           <tr>
             <td class="fname">ext-syntax-highlight.mext</td>
@@ -576,16 +751,38 @@
             <td><b>Emoji 短码</b></td>
             <td>把 <code>:smile:</code> 这类短码换成表情，并在工具栏加一个插入按钮；代码块里的短码不动。</td>
           </tr>
+          <tr class="group"><td colspan="3">图形与图表（零依赖内联 SVG）</td></tr>
+          <tr>
+            <td class="fname">ext-geometry.mext</td>
+            <td><b>几何作图</b></td>
+            <td>定义点后连线、画圆、标角；派生点（中点 / 外心 / 垂足 / 旋转 / 交点）与安全表达式求值，自动等比取景。</td>
+          </tr>
+          <tr>
+            <td class="fname">ext-chart.mext</td>
+            <td><b>统计图</b></td>
+            <td>12 类图表：柱状 / 折线 / 面积 / 饼 / 环 / 散点 / 气泡 / 雷达 / 直方图 / 热力 / 漏斗 / 箱线；自动刻度、图例、数值标签。</td>
+          </tr>
+          <tr>
+            <td class="fname">ext-flowchart.mext</td>
+            <td><b>流程图</b></td>
+            <td>兼容 Mermaid <code>flowchart / graph</code>：四种方向、八种形状、带标签连线、subgraph 分组、classDef 着色、自动分层布局。</td>
+          </tr>
+          <tr>
+            <td class="fname">ext-mindmap.mext</td>
+            <td><b>思维导图</b></td>
+            <td>兼容 Mermaid <code>mindmap</code> 与 Markdown 标题 / 列表层级，根节点居中、分支左右自动平衡，按分支着色。</td>
+          </tr>
         </tbody>
       </table>
 
       <div class="ext-body">
         <div class="rv">
           <ul class="api-list">
+            <li><code>ctx.md.preTransform</code><span>解析前改写整篇 Markdown（图形块靠它避开代码高亮）</span></li>
             <li><code>ctx.md.addBlockRule</code><span>定义新的块级语法，返回消耗行数</span></li>
             <li><code>ctx.md.postTransform</code><span>渲染完成后改写 HTML</span></li>
-            <li><code>ctx.md.inline</code><span>渲染一段行内文本</span></li>
-            <li><code>ctx.ui.addButton</code><span>往工具栏加按钮</span></li>
+            <li><code>ctx.md.inline</code><span>渲染一段行内文本（图注支持 Markdown）</span></li>
+            <li><code>ctx.ui.addButton</code><span>往工具栏加按钮，配模板面板</span></li>
             <li><code>ctx.ui.addCommand</code><span>注册专属快捷键</span></li>
             <li><code>ctx.app.panel</code><span>弹出自己的面板并拿到容器元素</span></li>
             <li><code>dispose</code><span>停用时清理注入的样式与监听</span></li>
@@ -593,22 +790,24 @@
         </div>
         <pre class="code rv"><span class="c">// 一个扩展就是一个 .mext 文件</span>
 <span class="f">api.register</span>({
-  <span class="n">name</span>: <span class="s">'容器块语法'</span>,
-  <span class="n">icon</span>: <span class="s">'📦'</span>,
+  <span class="n">name</span>: <span class="s">'流程图'</span>,
+  <span class="n">icon</span>: <span class="s">'🔀'</span>,
   <span class="n">init</span>: <span class="k">function</span> (ctx) {
+    <span class="c">// 先把 ```mermaid 改成私有块，绕开代码高亮扩展</span>
+    ctx.md.<span class="f">preTransform</span>(<span class="k">function</span> (text) { <span class="k">return</span> text; });
     ctx.md.<span class="f">addBlockRule</span>({
       <span class="n">test</span>: <span class="k">function</span> (lines, i) {
         <span class="k">return</span> <span class="n">0</span>;   <span class="c">// 0 = 不匹配</span>
       },
       <span class="n">render</span>: <span class="k">function</span> (lines, i, n) {
-        <span class="k">return</span> <span class="s">'&lt;div&gt;…&lt;/div&gt;'</span>;
+        <span class="k">return</span> <span class="s">'&lt;svg&gt;…&lt;/svg&gt;'</span>;
       }
     });
   },
   <span class="n">dispose</span>: <span class="k">function</span> () { <span class="c">/* 收尾 */</span> }
 });</pre>
       </div>
-      <p class="note rv">扩展会作为 JavaScript 在本页执行，只导入你信任的来源。同名扩展再次导入会替换旧的，不会叠加。</p>
+      <p class="note rv">扩展会作为 JavaScript 在本页执行，只导入你信任的来源。同名扩展再次导入会替换旧的，不会叠加；样式统一以 <code>-ext-style</code> 结尾的 id 注入，导出 HTML 时会被一起打包。</p>
     </section>
 
     <!-- 上手 -->
@@ -616,9 +815,9 @@
       <div class="sec-head rv">
         <div>
           <h2>三步就开始</h2>
-          <p>不需要安装，也不需要建账号。</p>
+          <p>不需要安装，也不需要建账号；想画图就再导入一个扩展。</p>
         </div>
-        <span class="sec-no">05 / 上手</span>
+        <span class="sec-no">06 / 上手</span>
       </div>
 
       <div class="steps">
@@ -635,6 +834,7 @@
           <p><kbd>Ctrl</kbd><kbd>S</kbd> 存成 Markdown，或者导出 HTML 发出去。不存也没关系，它已经在本地记住了。</p>
         </div>
       </div>
+      <p class="note rv">要画图或写题解：点顶栏「扩展」→「导入扩展」选对应的 <code>.mext</code>，工具栏会多出模板按钮，点一下就能插入示例，改文字即可。</p>
     </section>
 
   </div>
@@ -648,7 +848,15 @@
     </p>
     <div class="foot-links">
       <a href="index.html">index.html · 编辑器</a>
-      <a href="ext-luogu.mext">ext-luogu.mext</a>
+      <a href="A-Boat-功能介绍.md">功能介绍.md</a>
+      <a href="ext-luogu-261108.mext">ext-luogu-261108.mext</a>
+      <a href="ext-syntax-highlight.mext">ext-syntax-highlight.mext</a>
+      <a href="ext-admonition.mext">ext-admonition.mext</a>
+      <a href="ext-emoji.mext">ext-emoji.mext</a>
+      <a href="ext-geometry.mext">ext-geometry.mext</a>
+      <a href="ext-chart.mext">ext-chart.mext</a>
+      <a href="ext-flowchart.mext">ext-flowchart.mext</a>
+      <a href="ext-mindmap.mext">ext-mindmap.mext</a>
     </div>
   </div>
 </footer>
