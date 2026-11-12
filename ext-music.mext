@@ -1,0 +1,516 @@
+/* =========================================================
+ * 和弦图扩展 (ext-music.mext)
+ * ---------------------------------------------------------
+ * 只做一件事：把 iReal Pro 风格和弦谱渲染成内联 SVG。
+ *
+ *   围栏：```chord   （也兼容 ```music chord 与 :::chord）
+ *   记法：C / C- / C7 / Cm7 / Csus7 / Cdim / C+ / Cm7b5 / C/E
+ *         大七 C^ 或 Cmaj7 → C△7；Cmaj → C△     小调 - 原样保留
+ *         dim → 空心圆 °；△ / - / ° 均为统一线宽的矢量记号
+ *   元信息：Title: / Artist: / Style: / Key: / Tempo: / 4/4 / Caption:
+ *   小节：| 分隔；重复 |: 与 :|；反复跳过 1- … :| 2- …（房子记号）
+ *
+ * 输出纯内联 SVG，主题变量带 fallback，明暗主题与导出 HTML 均生效。
+ * 内部保留 mus-* 类名前缀，以兼容此前导出的 HTML。
+ * ========================================================= */
+api.register({
+  name: '和弦图',
+  version: '2.1.0',
+  author: '墨笺',
+  description: '渲染 iReal Pro 风格和弦谱（小节线、反复记号、反复跳过、斜杠低音）',
+  icon: '🎵',
+
+  init: function (ctx) {
+    var NL = '\n';
+    // 标题 / 中文文本：系统 UI 字体
+    var FONT = "'-apple-system','PingFang SC','Microsoft YaHei','Segoe UI',sans-serif";
+    // 和弦符号：西文无衬线优先，保证 A–G、数字、M/m/sus 的字形与字重统一扎实
+    var CHORD_FONT = "'Helvetica Neue',Helvetica,Arial,Inter,'Segoe UI'," + FONT;
+    // 升降记号：优先音乐字体，缺字时回退到系统符号字体，避免显示成方块
+    var SYM_FONT = "'Noto Music','Bravura','Segoe UI Symbol','Apple Symbols','DejaVu Sans'," + CHORD_FONT;
+    var TEXT = 'var(--text,#221f1b)', MUTED = 'var(--muted,#8a8478)';
+
+    // 字号层级：根音最大，性质次之，升降上标与斜杠低音最小
+    var SZ_ROOT = 21, SZ_QUAL = 13, SZ_ACC = 12.5, SZ_BASS = 12.5;
+    // 近似字宽系数（Helvetica / Arial Bold），宽度估算与分段定位共用同一套常量
+    var KW_QUAL = 0.64, KW_ACC = 0.58;
+    // 根音按字母分别估宽：A/G 在 Helvetica、Arial Bold 中明显比 B/E/F 宽，
+    // 用统一系数会让 A m7、G m7 这类组合贴字甚至重叠。
+    var ROOT_W = { A: 0.74, B: 0.69, C: 0.74, D: 0.74, E: 0.69, F: 0.63, G: 0.80 };
+    function rootWidth(root) { return SZ_ROOT * (ROOT_W[root] || 0.70); }
+    var RE_SYM = /[♯♭]/;
+    // △ / - / ° 不用字体字符：字体里的 △ 偏大偏重、- 太短太粗、° 太小太细，
+    // 与同段数字字母摆在一起视觉重量不一致。统一改为矢量图元绘制，线宽共用常量。
+    var RE_GLYPH = /[△°-]/;
+    var GLYPH_STROKE = 1.6;          // 与 13px / 600 字重的笔画等粗
+
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+
+    // 单段文字：用独立 <text> 定位，各段基线互不影响
+    function txt(x, y, s, size, weight, font, fill) {
+      return '<text x="' + x.toFixed(2) + '" y="' + y + '" font-family="' + font +
+        '" font-size="' + size + '" font-weight="' + weight + '" fill="' + fill +
+        '" text-rendering="geometricPrecision">' + esc(s) + '</text>';
+    }
+    // 单个记号的占位宽度（与 glyphSvg 的实际绘制宽度一致）
+    function glyphW(ch, size) {
+      if (ch === '△') return size * 0.80;
+      if (ch === '-') return size * 0.66;
+      if (ch === '°') return size * 0.62;
+      return size * KW_ACC;                       // ♯ / ♭
+    }
+    // 几何记号，y 为文字基线；三者同一线宽 GLYPH_STROKE
+    function glyphSvg(ch, x, y, size, color) {
+      var c = 'fill="none" stroke="' + color + '" stroke-width="' + GLYPH_STROKE + '"';
+      var n = function (v) { return v.toFixed(2); };
+      if (ch === '△') {
+        // 空心等腰三角形：高度略小于同字号 cap height，不喧宾夺主
+        var h = size * 0.64, w = size * 0.70, x0 = x + 0.6, y0 = y - 1.2;
+        return '<path d="M' + n(x0) + ' ' + n(y0) + ' L' + n(x0 + w / 2) + ' ' + n(y0 - h) +
+          ' L' + n(x0 + w) + ' ' + n(y0) + ' Z" ' + c + ' stroke-linejoin="round"/>';
+      }
+      if (ch === '-') {
+        // 短横：落在 x-height 中部，长度与一个性质字符相仿
+        var w2 = size * 0.66, my = y - size * 0.32;
+        return '<line x1="' + n(x + 0.6) + '" y1="' + n(my) + '" x2="' + n(x + w2 - 0.6) +
+          '" y2="' + n(my) + '" ' + c + '/>';
+      }
+      // ° 减和弦的空心圆：贴近字母 x-height 上部，笔画与其余记号同粗
+      var r = size * 0.245;
+      return '<circle cx="' + n(x + size * 0.31) + '" cy="' + n(y - size * 0.44) +
+        '" r="' + n(r) + '" ' + c + '/>';
+    }
+    // 含特殊记号的字符串按字符估宽（符号、几何记号与普通字符字宽各不相同）
+    function segWidth(s, size) {
+      var w = 0;
+      for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        w += (RE_SYM.test(ch) || RE_GLYPH.test(ch)) ? glyphW(ch, size) : size * KW_QUAL;
+      }
+      return w;
+    }
+    // 分段绘制：升降记号切到符号字体，△ - ° 用几何图元，其余保持和弦字体
+    function segSvg(s, x, y, size, weight, color) {
+      var out = '', buf = '', cx = x;
+      for (var i = 0; i < s.length; i++) {
+        var ch = s.charAt(i);
+        var isSym = RE_SYM.test(ch), isGlyph = RE_GLYPH.test(ch);
+        if (isSym || isGlyph) {
+          if (buf) { out += txt(cx, y, buf, size, weight, CHORD_FONT, color); cx += segWidth(buf, size); buf = ''; }
+          out += isGlyph ? glyphSvg(ch, cx, y, size, color)
+            : txt(cx, y, ch, size, weight, SYM_FONT, color);
+          cx += glyphW(ch, size);
+        } else buf += ch;
+      }
+      if (buf) out += txt(cx, y, buf, size, weight, CHORD_FONT, color);
+      return out;
+    }
+
+    /* =====================================================
+     * 1) 和弦解析（iReal Pro 记法）
+     * ===================================================== */
+    function parseChord(tok) {
+      tok = (tok || '').trim();
+      if (!tok) return null;
+      if (tok === 'N.C.' || tok === 'NC' || tok === '%') return { rest: true, sym: tok };
+      var m = tok.match(/^([A-Ga-g])([#b]?)(.*)$/);
+      if (!m) return { raw: tok };
+      var root = m[1].toUpperCase();
+      var acc = m[2] === '#' ? '♯' : m[2] === 'b' ? '♭' : '';
+      var rest = m[3], bass = null;
+      var sl = rest.indexOf('/');
+      if (sl >= 0) { bass = rest.slice(sl + 1); rest = rest.slice(0, sl); }
+      // 规范成显示文本：△ / - / ° 由 segSvg 用统一线宽的矢量图元绘制
+      var q = rest;
+      q = q.replace(/maj7/g, '△7').replace(/maj/g, '△');
+      q = q.replace(/\^/g, '△');            // 大七（三角）：C^ / Cmaj7 → C△7
+      q = q.replace(/dim/g, '°');           // 减和弦（空心圆）
+      q = q.replace(/aug/g, '+');           // 增
+      q = q.replace(/#/g, '♯').replace(/b(?=\d)/g, '♭');   // C7b5 → C7♭5
+      // 小调记号 - 原样保留（不改成 m）
+      if (bass) {
+        bass = bass.replace(/maj7/g, '△7').replace(/maj/g, '△').replace(/\^/g, '△')
+                   .replace(/dim/g, '°').replace(/aug/g, '+');
+        bass = bass.charAt(0).toUpperCase() + bass.slice(1);
+        var bm = bass.match(/^([A-G])([#b])$/);
+        bass = bm
+          ? { note: bm[1], acc: bm[2] === '#' ? '♯' : '♭' }
+          : { note: bass, acc: '' };
+      }
+      return { root: root, acc: acc, qual: q, bass: bass || null };
+    }
+
+    function chordWidth(c) {
+      if (c.rest) return (c.sym || '').length * 11 + 8;
+      if (c.raw) return c.raw.length * 11 + 8;
+      var w = rootWidth(c.root);
+      if (c.acc) w += SZ_ACC * KW_ACC + 1;
+      if (c.qual) w += 1 + segWidth(c.qual, SZ_QUAL);
+      if (c.bass) {
+        w += 3 + SZ_BASS * 0.38;                                   // 斜杠
+        w += segWidth(c.bass.note, SZ_BASS) + (c.bass.acc ? SZ_ACC * KW_ACC : 0);
+      }
+      return Math.ceil(w) + 8;
+    }
+
+    function chordSvg(c, x, y) {
+      if (c.rest) return txt(x, y, c.sym, SZ_ROOT, 700, CHORD_FONT, MUTED);
+      if (c.raw) return txt(x, y, c.raw, SZ_ROOT, 700, CHORD_FONT, TEXT);
+      var s = '', cx = x;
+      s += txt(cx, y, c.root, SZ_ROOT, 700, CHORD_FONT, TEXT);
+      cx += rootWidth(c.root);
+      if (c.acc) {   // 升降记号：小号右上角上标
+        s += txt(cx + 0.5, y - 8, c.acc, SZ_ACC, 700, SYM_FONT, TEXT);
+        cx += SZ_ACC * KW_ACC + 1;
+      }
+      if (c.qual) {
+        s += segSvg(c.qual, cx + 1, y, SZ_QUAL, 600, TEXT);
+        cx += 1 + segWidth(c.qual, SZ_QUAL);
+      }
+      if (c.bass) {
+        s += txt(cx + 3, y, '/', SZ_BASS, 600, CHORD_FONT, TEXT);
+        cx += 3 + SZ_BASS * 0.38;
+        s += segSvg(c.bass.note, cx, y, SZ_BASS, 600, TEXT);
+        cx += segWidth(c.bass.note, SZ_BASS);
+        if (c.bass.acc) s += txt(cx, y - 6, c.bass.acc, SZ_ACC, 700, SYM_FONT, TEXT);
+      }
+      return s;
+    }
+
+    function dots(px, y0, y1) {
+      var my = (y0 + y1) / 2;
+      return '<circle cx="' + px + '" cy="' + (my - 4.5) + '" r="1.3" fill="var(--text,#221f1b)"/>' +
+        '<circle cx="' + px + '" cy="' + (my + 4.5) + '" r="1.3" fill="var(--text,#221f1b)"/>';
+    }
+
+    function drawBar(x, y0, y1, type) {
+      function thin(xx) { return '<line x1="' + xx + '" y1="' + y0 + '" x2="' + xx + '" y2="' + y1 + '" stroke="var(--text,#221f1b)" stroke-width="1.4"/>'; }
+      function thick(xx) { return '<line x1="' + xx + '" y1="' + y0 + '" x2="' + xx + '" y2="' + y1 + '" stroke="var(--text,#221f1b)" stroke-width="3"/>'; }
+      if (type === 'single') return thin(x);
+      if (type === 'open') return thin(x) + thick(x + 3.5) + dots(x + 8, y0, y1);                    // |:
+      if (type === 'close') return dots(x + 1, y0, y1) + thick(x + 5) + thin(x + 8.5);                // :|
+      if (type === 'both') return dots(x + 1, y0, y1) + thick(x + 5) + thin(x + 8.5) +
+        thin(x + 12) + thick(x + 15.5) + dots(x + 20, y0, y1);                                        // :||:
+      return '';
+    }
+
+    // 反复跳过记号（volta / 房子）：上横线 + 左端下垂短线 + 段首数字
+    function drawVolta(x0, x1, yb, num) {
+      var y = yb - 22, c = 'stroke="' + TEXT + '" stroke-width="1.1" fill="none"';
+      return '<line x1="' + x0 + '" y1="' + y + '" x2="' + x1 + '" y2="' + y + '" ' + c + '/>' +
+        '<line x1="' + x0 + '" y1="' + y + '" x2="' + x0 + '" y2="' + (y + 5) + '" ' + c + '/>' +
+        '<text x="' + (x0 + 5) + '" y="' + (y - 3) + '" font-family="' + CHORD_FONT +
+        '" font-size="10.5" font-weight="600" fill="' + MUTED + '">' + num + '.</text>';
+    }
+
+    /* ---- 把一行拆成若干小节（含重复记号与反复跳过） ---- */
+    function splitMeasures(line) {
+      // 反复记号先换占位符，避免 :| / |: 里的竖线被当成小节分隔符
+      var s = String(line || '').trim()
+        .replace(/\|:/g, '|\u0001').replace(/:\|/g, '\u0002|')
+        .replace(/^\s*\|/, '').replace(/\|\s*$/, '');
+      var parts = s.split('|');
+      var out = [];
+      for (var i = 0; i < parts.length; i++) {
+        var p = parts[i];
+        var startRep = p.indexOf('\u0001') >= 0;
+        var endRep = p.indexOf('\u0002') >= 0;
+        p = p.replace(/[\u0001\u0002]/g, '');
+        // 房子记号：1- / 2- / 1. / 2.（写在小节开头，也兼容 1-Cmaj7 连写）
+        var ending = 0;
+        p = p.replace(/(^|\s)([1-9])([-.])/g, function (all, pre, d) {
+          if (!ending) ending = parseInt(d, 10);
+          return pre;
+        });
+        var toks = p.trim().split(/\s+/).filter(Boolean).map(parseChord).filter(Boolean);
+        if (toks.length || startRep || endRep || ending) {
+          out.push({ chords: toks, startRep: startRep, endRep: endRep, ending: ending });
+        }
+      }
+      return out;
+    }
+
+    /* =====================================================
+     * 2) 和弦谱渲染
+     * ===================================================== */
+    function renderChord(lines) {
+      var meta = { title: '', artist: '', style: '', key: '', tempo: '', time: '', caption: '' };
+      var rows = [];
+      for (var i = 0; i < lines.length; i++) {
+        var ln = lines[i].trim();
+        if (!ln) continue;
+        var h = ln.match(/^(Title|Artist|Style|Key|Tempo|BPM|Composer|Caption)\s*:\s*(.*)$/i);
+        if (h) {
+          var k = h[1].toLowerCase();
+          if (k === 'bpm') k = 'tempo';
+          if (k === 'caption') meta.caption = h[2];
+          else meta[k] = h[2];
+          continue;
+        }
+        if (/^\d+\/\d+$/.test(ln)) { meta.time = ln; continue; }
+        rows.push(splitMeasures(ln));
+      }
+      // 统一小节宽度：取所有小节中最宽者
+      var maxC = 1;
+      rows.forEach(function (ms) { ms.forEach(function (m) {
+        var w = 0; m.chords.forEach(function (c, idx) { w += chordWidth(c) + (idx ? 7 : 0); });
+        if (w > maxC) maxC = w;
+      }); });
+      var cellW = Math.max(maxC + 34, 54);
+
+      // 有反复跳过记号时，谱面顶部多留一行给房子括号与编号
+      var hasVolta = rows.some(function (ms) { return ms.some(function (m) { return !!m.ending; }); });
+      var leftPad = 12, topPad = 12, chordY = topPad + 30;
+      if (meta.title) { topPad += 26; chordY += 26; }
+      if (hasVolta) chordY += 18;
+      var rowH = 56;
+      var contentW = leftPad + Math.max(1, rows.reduce(function (a, r) { return Math.max(a, r.length); }, 0)) * cellW;
+      var svgW = Math.max(contentW, 120);
+      var svgH = topPad + rows.length * rowH + (hasVolta ? 32 : 14);
+
+      var svg = '';
+      if (meta.title) {
+        svg += '<text x="' + leftPad + '" y="26" font-family="' + FONT + '" font-size="23" font-weight="700" letter-spacing="0.2" fill="' + TEXT + '">' + esc(meta.title) + '</text>';
+        var sub = [];
+        if (meta.style) sub.push(meta.style);
+        if (meta.key) sub.push('Key: ' + meta.key);
+        if (meta.time) sub.push(meta.time);
+        if (meta.tempo) sub.push(meta.tempo);
+        if (sub.length) svg += '<text x="' + leftPad + '" y="46" font-family="' + CHORD_FONT + '" font-size="12.5" letter-spacing="0.3" fill="' + MUTED + '">' + esc(sub.join('  ·  ')) + '</text>';
+      }
+
+      for (var r = 0; r < rows.length; r++) {
+        var ms = rows[r], x = leftPad, yb = chordY + r * rowH;
+        // 房子括号：连续相同编号的小节合并为一条横线，编号只标在段首
+        var vi = 0;
+        while (vi < ms.length) {
+          if (!ms[vi].ending) { vi++; continue; }
+          var vnum = ms[vi].ending, vj = vi;
+          while (vj + 1 < ms.length && ms[vj + 1].ending === vnum) vj++;
+          svg += drawVolta(leftPad + vi * cellW + 1, leftPad + (vj + 1) * cellW + 1, yb, vnum);
+          vi = vj + 1;
+        }
+        var prevEnd = false;
+        for (var mi = 0; mi < ms.length; mi++) {
+          var m = ms[mi];
+          var btype;
+          if (mi === 0) btype = m.startRep ? 'open' : 'single';
+          else if (prevEnd && m.startRep) btype = 'both';
+          else if (prevEnd) btype = 'close';
+          else if (m.startRep) btype = 'open';
+          else btype = 'single';
+          svg += drawBar(x, yb - 18, yb + 10, btype);
+          // 反复记号带圆点，和弦起点需相应右移，避免贴住记号
+          var lead = btype === 'both' ? 25 : (btype === 'open' || btype === 'close') ? 15 : 9;
+          var cx = x + lead;
+          m.chords.forEach(function (c) {
+            svg += chordSvg(c, cx, yb);
+            cx += chordWidth(c) + 7;
+          });
+          x += cellW;
+          prevEnd = m.endRep;
+        }
+        svg += drawBar(x, yb - 18, yb + 10, prevEnd ? 'close' : 'single');
+      }
+
+      return figure(svg, svgW, svgH, meta.caption);
+    }
+
+    /* ---- 统一样式包裹 ---- */
+    function figure(inner, w, h, caption) {
+      var cap = '';
+      if (caption) {
+        var ci = ctx && ctx.md && ctx.md.inline ? ctx.md.inline(caption) : esc(caption);
+        cap = '<div class="mus-cap">' + ci + '</div>';
+      }
+      return '<div class="mus-figure"><svg viewBox="0 0 ' + w + ' ' + h + '" ' +
+        'xmlns="http://www.w3.org/2000/svg" role="img" preserveAspectRatio="xMinYMin meet">' +
+        inner + '</svg>' + cap + '</div>';
+    }
+
+    /* =====================================================
+     * 语法隔离：把 chord 围栏改写成私有块，绕开代码高亮扩展
+     * ===================================================== */
+    var RE_OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(chord|music)\b([^`~]*)$/i;
+    var RE_ANY_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+    var RE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+    var RE_OPEN_CTR = /^\s{0,3}:::(chord|music)\b(.*)$/i;
+    var RE_CLOSE_CTR = /^\s{0,3}:::\s*$/;
+
+    // 统一输出 %%%chord，info 里的类型词剔除后作为首行（兼容旧写法）
+    function blockHead(info) {
+      var rest = (info || '').replace(/\b(chord|music)\b/gi, '').trim();
+      return '%%%chord' + (rest ? ' ' + rest : '');
+    }
+
+    ctx.md.preTransform(function (text) {
+      var src = String(text == null ? '' : text).split('\n');
+      var out = [], i = 0;
+      while (i < src.length) {
+        var line = src[i], m = line.match(RE_OPEN_FENCE);
+        if (m) {
+          var ch = m[1].charAt(0), n = m[1].length, j = i + 1;
+          while (j < src.length) {
+            var cm = src[j].match(RE_CLOSE);
+            if (cm && cm[1].charAt(0) === ch && cm[1].length >= n) break;
+            j++;
+          }
+          if (j < src.length) {
+            out.push(blockHead(m[3]));
+            for (var k = i + 1; k < j; k++) out.push(src[k]);
+            out.push('%%%endchord');
+            i = j + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        var mc = line.match(RE_OPEN_CTR);
+        if (mc) {
+          var j2 = i + 1;
+          while (j2 < src.length && !RE_CLOSE_CTR.test(src[j2])) j2++;
+          if (j2 < src.length) {
+            out.push(blockHead(mc[2]));
+            for (var k2 = i + 1; k2 < j2; k2++) out.push(src[k2]);
+            out.push('%%%endchord');
+            i = j2 + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        var mf = line.match(RE_ANY_FENCE);
+        if (mf) {
+          var ch2 = mf[1].charAt(0), n2 = mf[1].length;
+          out.push(line); i++;
+          while (i < src.length) {
+            out.push(src[i]);
+            var cc = src[i].match(RE_CLOSE);
+            if (cc && cc[1].charAt(0) === ch2 && cc[1].length >= n2) { i++; break; }
+            i++;
+          }
+          continue;
+        }
+        out.push(line); i++;
+      }
+      return out.join('\n');
+    });
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}%%%chord(?:\s|$)/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}%%%endchord\s*$/.test(lines[j])) j++;
+        return j < lines.length ? j - i + 1 : 0;
+      },
+      render: function (lines, i, n) {
+        var head = lines[i].match(/^\s{0,3}%%%chord\s*(.*)$/);
+        var body = [];
+        if (head && head[1] && head[1].trim()) body.push(head[1].trim());
+        for (var k = i + 1; k < i + n - 1; k++) body.push(lines[k]);
+        try {
+          return renderChord(body);
+        } catch (e) {
+          return '<div class="mus-figure"><div class="mus-errbox"><b>⚠ 和弦渲染失败：</b>' +
+            esc(e && e.message ? e.message : e) + '</div></div>';
+        }
+      }
+    });
+
+    /* =====================================================
+     * 样式注入（导出 HTML 时由宿主收集）
+     * ===================================================== */
+    var STYLE_ID = 'mus-ext-style';
+    var CSS = [
+      '.preview .mus-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden;padding:10px 12px}',
+      '.preview .mus-figure svg{display:block;width:100%;height:auto;margin:0 auto}',
+      '.preview .mus-cap{margin:.5em .2em 0;font-size:13px;color:var(--muted,#8a8478);text-align:center}',
+      '.preview .mus-errbox{color:#b4232a;font-size:13px;padding:.4em .6em}',
+      '.mus-picker{padding:4px 2px}',
+      '.mus-sec{margin:10px 0 6px;font-size:12px;font-weight:700;color:var(--muted,#8a8478)}',
+      '.mus-grid{display:flex;gap:8px;flex-wrap:wrap}',
+      '.mus-help{margin:0;padding:10px 12px;background:var(--panel,#fff);border:1px solid var(--line,#e6e2da);border-radius:8px;font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;color:var(--text,#221f1b)}'
+    ];
+    var styleEl = document.getElementById(STYLE_ID);
+    if (!styleEl) {
+      styleEl = document.createElement('style');
+      styleEl.id = STYLE_ID; styleEl.textContent = CSS.join('\n');
+      document.head.appendChild(styleEl);
+    }
+
+    /* =====================================================
+     * 工具栏：示例与语法速查
+     * ===================================================== */
+    var TPL = {
+      chord: [
+        'Title: Autumn Leaves',
+        'Style: Swing   Key: Cm   4/4',
+        '|: C-7   F7   | Bbmaj7  Eb^  |',
+        ' | 1- Am7  D7 :| 2- G-7  C7  | C-7   %   |',
+        '| Cdim   C+   | C7b5  C7#9  | C/E   Am7/G |'
+      ].join(NL)
+    };
+    var LABELS = { chord: '和弦图' };
+    var HELP = [
+      '和弦图 —— iReal Pro 记法',
+      '  根音：C D E F G A B；升降号紧跟根音：Bb  F#  C#m7',
+      '  性质：^  或 maj7  → △7（大七）      -  保持减号（小三）  m 亦可用',
+      '        7 / 9 / 11 / 13 / 6 / sus / add    dim → °（减）  aug → +（增）  ø 半减',
+      '        △ / - / ° 用统一线宽绘制，与数字笔画等粗',
+      '  变化音：C7b5 → C7♭5，C7#9 → C7♯9',
+      '  斜杠低音：C/E    Am7/G    Bb△7/D',
+      '  休止：N.C.（无和弦）    %（沿用上一小节）',
+      '',
+      '元信息（各占一行）',
+      '  Title: 曲名     Artist: 演奏者     Style: Swing     Key: Cm',
+      '  Tempo: 120  或 BPM: 120     Caption: 图注     4/4（拍号）',
+      '',
+      '小节、反复与反复跳过',
+      '  | 分隔小节；  |: 与 :| 表示反复起止',
+      '  1- / 2- 写在小节开头，标出第 1 / 第 2 房子（也兼容 1. / 2.）',
+      '  例：|: C-7 F7 | 1- Am7 D7 :| 2- G-7 C7 | C-7 |',
+      '  连续多个 1- 小节会自动合并成一条房子横线',
+      '',
+      '围栏写法',
+      '  ```chord   （也可用 ```music chord 或 :::chord）'
+    ].join(NL);
+
+    function insertTpl(h) {
+      h.insertText(NL + NL + '```chord' + NL + TPL.chord + NL + '```' + NL + NL);
+      ctx.app.toast('已插入「和弦图」示例');
+    }
+    function pickerHtml() {
+      return '<div class="mus-picker">' +
+        '<div class="mus-sec">插入示例</div>' +
+        '<div class="mus-grid"><button class="btn ghost small" data-mus="chord">和弦图示例</button></div>' +
+        '<div class="mus-sec">语法速查</div><pre class="mus-help">' + esc(HELP) + '</pre>' +
+        '</div>';
+    }
+    ctx.ui.addButton({
+      id: 'music',
+      icon: '🎵',
+      title: '和弦图（插入示例 / 语法速查）',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '和弦图');
+        body.onclick = function (ev) {
+          if (!ev.target || !ev.target.closest) return;
+          if (!ev.target.closest('[data-mus="chord"]')) return;
+          insertTpl(h);
+          var mask = document.getElementById('extCustomMask');
+          if (mask) mask.classList.remove('show');
+        };
+      }
+    });
+    ctx.ui.addCommand({
+      id: 'music-chord', key: 'm', ctrl: true, alt: true,
+      onClick: function (h) { insertTpl(h); }
+    });
+  },
+
+  dispose: function () {
+    var s = document.getElementById('mus-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});
