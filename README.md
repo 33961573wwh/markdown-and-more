@@ -1,5 +1,9 @@
 # UPD
 
+## 2026.11.17
+
+- 增加扩展说明
+
 ## 2026.11.12
 
 - 增加和弦谱扩展
@@ -7,6 +11,18 @@
 ## 2026.11.11
 
 - 多选扩展/多标签页
+
+# 扩展
+
+- `ext-admonition.mext`：容器块
+- `ext-chart.mext`：统计图
+- `ext-emoji.mext`：emoji
+- `ext-flowchart.mext`：流程图
+- `ext-geometry.mext`：几何
+- `ext-luogu.mext`：洛谷新特性
+- `ext-mindmap.mext`：思维导图
+- `ext-music.mext`：和弦谱
+- `ext-syntax-highlight.mext`：代码高亮
 
 # A Boat · 功能介绍与扩展选型指南
 
