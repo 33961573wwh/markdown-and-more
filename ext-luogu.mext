@@ -3,6 +3,8 @@
  * ---------------------------------------------------------
  * 支持洛谷 2025 版 Markdown 的全部扩展语法：
  *   折叠框   :::info[标题]{open} … :::   （info/success/warning/error，可嵌套）
+ *            洛谷官方样式：左侧彩色圆角竖条 + 圆形图标 + 彩色标题 + 右侧箭头
+ *   B站视频  ::bilibili[可选标题]{BV号 / av号 / 视频链接}
  *   居中     :::align{center} … :::
  *   居右     :::align{right} … :::
  *   引言     :::epigraph[——otto] … :::
@@ -15,9 +17,9 @@
  * ========================================================= */
 api.register({
   name: '洛谷新特性',
-  version: '1.0.0',
+  version: '1.1.0',
   author: '墨笺',
-  description: '折叠框 / 居中 / 居右 / 引言 / Tuack 表格 / 代码行号与高亮 / 表格合并单元格',
+  description: '折叠框（官方样式）/ B站视频 / 居中 / 居右 / 引言 / Tuack 表格 / 代码行号与高亮 / 表格合并单元格',
   icon: '🌱',
 
   init: function (ctx) {
@@ -25,22 +27,29 @@ api.register({
     /* ---------------- 样式 ---------------- */
     var STYLE_ID = 'lg-ext-style';
     var CSS = [
-      '.preview .lg-fold{margin:1.15em 0;border:1px solid var(--line);border-radius:10px;background:var(--panel-2);overflow:hidden}',
-      '.preview .lg-fold>summary{cursor:pointer;padding:.6em .95em;font-weight:650;color:var(--text);display:flex;align-items:center;gap:.5em;list-style:none;user-select:none}',
+      /* 折叠框：洛谷官方样式 —— 左侧彩色圆角竖条 + 圆形图标 +
+         彩色加粗标题 + 右侧实心小三角箭头（展开时转 90° 朝下），
+         无边框无底色；每层颜色由 --lgc 统一驱动 */
+      '.preview .lg-fold{margin:1.15em 0;position:relative;padding-left:19px}',
+      '.preview .lg-fold::before{content:"";position:absolute;left:0;top:2px;bottom:2px;width:5px;border-radius:3px;background:var(--lgc,#8d8880)}',
+      '.preview .lg-fold.lg-info{--lgc:#2296f3}',
+      '.preview .lg-fold.lg-success{--lgc:#52c41a}',
+      '.preview .lg-fold.lg-warning{--lgc:#f5b300}',
+      '.preview .lg-fold.lg-error{--lgc:#e8554d}',
+      '.preview .lg-fold>summary{cursor:pointer;padding:.4em .9em .4em .1em;font-weight:700;color:var(--lgc,#555);display:flex;align-items:center;gap:.55em;list-style:none;user-select:none}',
       '.preview .lg-fold>summary::-webkit-details-marker{display:none}',
-      '.preview .lg-fold>summary::before{content:"\\25B8";font-size:.85em;color:var(--muted);transition:transform .16s ease;display:inline-block}',
-      '.preview .lg-fold[open]>summary::before{transform:rotate(90deg)}',
-      '.preview .lg-fold-body{padding:.1em .95em .9em;border-top:1px solid var(--line)}',
-      '.preview .lg-fold-body>:first-child{margin-top:.65em}',
+      '.preview .lg-fold>summary::after{content:"";margin-left:auto;flex:none;width:0;height:0;border-left:6px solid var(--lgc,#555);border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;transition:transform .16s ease}',
+      '.preview .lg-fold[open]>summary::after{transform:rotate(90deg)}',
+      '.preview .lg-ic{display:inline-flex;flex:none;width:1.2em;height:1.2em}',
+      '.preview .lg-ic svg{width:100%;height:100%;display:block}',
+      '.preview .lg-fold-body{padding:.1em .9em .85em .1em}',
+      '.preview .lg-fold-body>:first-child{margin-top:.5em}',
       '.preview .lg-fold-body>:last-child{margin-bottom:0}',
-      '.preview .lg-info{box-shadow:inset 3px 0 0 #3b82f6}',
-      '.preview .lg-success{box-shadow:inset 3px 0 0 #22c55e}',
-      '.preview .lg-warning{box-shadow:inset 3px 0 0 #f59e0b}',
-      '.preview .lg-error{box-shadow:inset 3px 0 0 #ef4444}',
-      '.preview .lg-info>summary{color:#3b82f6}',
-      '.preview .lg-success>summary{color:#22c55e}',
-      '.preview .lg-warning>summary{color:#d97706}',
-      '.preview .lg-error>summary{color:#ef4444}',
+      /* B 站视频：16:9 自适应 + 居中标题说明 */
+      '.lg-bili{margin:1.15em 0}',
+      '.lg-bili-frame{position:relative;aspect-ratio:16/9;max-width:100%;border-radius:8px;overflow:hidden;background:#000}',
+      '.lg-bili-frame iframe{position:absolute;inset:0;width:100%;height:100%;border:0}',
+      '.lg-bili-cap{margin-top:.45em;font-size:.92em;color:var(--muted,#8d8880);text-align:center}',
       '.preview .lg-align-center{text-align:center}',
       '.preview .lg-align-right{text-align:right}',
       '.preview .lg-epigraph{margin:1.15em 0;padding:.15em 1em;border-left:3px solid var(--line-strong);color:var(--text-soft);font-style:italic}',
@@ -214,15 +223,34 @@ api.register({
     var RE_CONTAINER = /^\s{0,3}(:{3,})\s*(info|success|warning|error|align|epigraph)\s*(?:\[([^\]]*)\])?\s*(?:\{([^}]*)\})?\s*$/;
     var DEFAULTS = { info: '提示', success: '成功', warning: '注意', error: '错误' };
 
+    /* 折叠框圆形图标（矢量绘制，底色用 currentColor 跟随标题颜色） */
+    var FOLD_ICONS = {
+      info:    '<circle cx="10" cy="10" r="10" fill="currentColor"/><circle cx="10" cy="5.3" r="1.7" fill="#fff"/><rect x="8.55" y="8.2" width="2.9" height="7" rx="1.45" fill="#fff"/>',
+      success: '<circle cx="10" cy="10" r="10" fill="currentColor"/><path d="M5.7 10.6l2.8 2.9 5.8-6.3" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>',
+      warning: '<circle cx="10" cy="10" r="10" fill="currentColor"/><rect x="8.55" y="4.5" width="2.9" height="7.1" rx="1.45" fill="#fff"/><circle cx="10" cy="14.5" r="1.7" fill="#fff"/>',
+      error:   '<circle cx="10" cy="10" r="10" fill="currentColor"/><path d="M6.4 6.4l7.2 7.2M13.6 6.4l-7.2 7.2" fill="none" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/>'
+    };
+    function foldIcon(type) {
+      return '<span class="lg-ic"><svg viewBox="0 0 20 20" aria-hidden="true">' +
+        (FOLD_ICONS[type] || FOLD_ICONS.info) + '</svg></span>';
+    }
+
     ctx.md.addBlockRule({
       test: function (lines, i) {
         var m = lines[i].match(RE_CONTAINER);
         if (!m) return 0;
         if (insideFence(lines, i)) return 0;
         var n = m[1].length;
+        var depth = 0;
         for (var j = i + 1; j < lines.length; j++) {
-          var cm = lines[j].match(/^\s{0,3}(:{3,})\s*$/);
-          if (cm && cm[1].length === n) return j - i + 1;   // 同级冒号数即为闭合标记
+          var line = lines[j];
+          // 嵌套的同级开容器 → 深度 +1（如 ::: 里再套 :::warning）
+          if (RE_CONTAINER.test(line) && line.match(/^\s{0,3}(:{3,})/)[1].length === n) { depth++; continue; }
+          var cm = line.match(/^\s{0,3}(:{3,})\s*$/);
+          if (cm && cm[1].length === n) {
+            if (depth === 0) return j - i + 1;   // 深度已归零，这个才是本容器的闭合标记
+            depth--;
+          }
         }
         return 0;
       },
@@ -245,8 +273,44 @@ api.register({
         var open = /(^|\s)open(\s|$)/.test(param);
         var label = title || DEFAULTS[type] || '详情';
         return '<details class="lg-fold lg-' + type + '"' + (open ? ' open' : '') + '>' +
-          '<summary>' + ctx.md.inline(label) + '</summary>' +
+          '<summary>' + foldIcon(type) + ctx.md.inline(label) + '</summary>' +
           '<div class="lg-fold-body">' + body + '</div></details>';
+      }
+    });
+
+    /* ---------------- 规则 1.5：B 站视频 ----------------
+     * ::bilibili[可选标题]{BV号 / av号 / 视频链接}
+     * 支持：BV1xx… / av12345 / 纯数字 av 号 / 完整 bilibili 视频链接 */
+    var RE_BILI = /^\s{0,3}::bilibili\s*(?:\[([^\]]*)\])?\s*\{([^}]*)\}\s*$/;
+
+    function biliId(raw) {
+      var s = String(raw || '').trim();
+      var m = s.match(/BV[0-9A-Za-z]{8,12}/);
+      if (m) return { type: 'bvid', id: m[0] };
+      m = s.match(/av(\d+)/i) || (/^\d+$/.test(s) ? [null, s] : null);
+      if (m) return { type: 'aid', id: m[1] };
+      return null;
+    }
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        var m = lines[i].match(RE_BILI);
+        if (!m) return 0;
+        if (insideFence(lines, i)) return 0;
+        return biliId(m[2]) ? 1 : 0;
+      },
+      render: function (lines, i) {
+        var m = lines[i].match(RE_BILI);
+        var v = biliId(m[2]);
+        var src = '//player.bilibili.com/player.html?' +
+          (v.type === 'bvid' ? 'bvid=' + v.id : 'aid=' + v.id) +
+          '&autoplay=0&danmaku=0&high_quality=1&rel=0';
+        var cap = m[1] ? '<div class="lg-bili-cap">' + ctx.md.inline(m[1]) + '</div>' : '';
+        return '<div class="lg-bili"><div class="lg-bili-frame">' +
+          '<iframe src="' + esc(src) + '" scrolling="no" frameborder="0" ' +
+          'allowfullscreen="true" loading="lazy" ' +
+          'allow="fullscreen; encrypted-media; picture-in-picture"></iframe>' +
+          '</div>' + cap + '</div>';
       }
     });
 
@@ -342,6 +406,7 @@ api.register({
       'align-center': ':::align{center}\n' + C + '居中的内容\n:::',
       'align-right':  ':::align{right}\n' + C + '居右的内容\n:::',
       'epigraph':     ':::epigraph[——otto]\n' + C + '引言内容\n:::',
+      'bilibili':     '::bilibili[' + C + '视频标题]{BV1GJ411x7h7}\n',
       'cute-table':   '::cute-table{tuack}\n\n' +
                       '| 测试点编号 | n ≤ | m ≤ | 特殊性质 |\n' +
                       '| :-: | :-: | :-: | :-: |\n' +
@@ -364,6 +429,7 @@ api.register({
       'align-center': '居中 align',
       'align-right':  '居右 align',
       'epigraph':     '引言 epigraph',
+      'bilibili':     'B站视频 bilibili',
       'cute-table':   'Tuack 风格表格',
       'table-merge':  '合并单元格表格',
       'code-lineno':  '代码行号',
@@ -381,10 +447,12 @@ api.register({
       return '<div class="lg-picker">' +
         sec('折叠框', ['fold-info', 'fold-success', 'fold-warning', 'fold-error', 'fold-open']) +
         sec('排版', ['align-center', 'align-right', 'epigraph']) +
+        sec('视频', ['bilibili']) +
         sec('表格', ['cute-table', 'table-merge']) +
         sec('代码', ['code-lineno', 'code-range']) +
         sec('模板', ['solution']) +
-        '<div class="lg-note">折叠框标题支持 LaTeX（<code>$$…$$</code>）；' +
+        '<div class="lg-note">折叠框可无限嵌套，标题支持 LaTeX（<code>$$…$$</code>），' +
+        '<code>{open}</code> 默认展开；B站视频填 <code>BV 号</code>、<code>av 号</code>或视频链接均可；' +
         '表格中 <code>^</code> 向上合并、<code>&lt;</code> 向左合并；' +
         '代码块用 <code>line-numbers</code> 显示行号、<code>lines=5-6</code> 高亮区间。</div>' +
         '</div>';
