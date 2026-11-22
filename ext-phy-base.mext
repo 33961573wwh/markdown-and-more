@@ -1,0 +1,793 @@
+/* =========================================================
+ * 物理·基础作图  (ext-phy-base.mext)
+ * ---------------------------------------------------------
+ * 从「物理绘图」按分类拆出的独立扩展，单独导入即可使用。
+ * 写法：
+ *   ```phybase
+ *   size 520x320
+ *   grid on
+ *   rect 1 1 3 2 fill
+ *   line 1 1 7 1 arrow
+ *   anglemark 1 1 1.2 0 55 "θ"
+ *   ```
+ * 也支持 :::phybase … ::: 容器写法。
+ * 坐标系：世界坐标，y 轴朝上为正；默认自动等比取景，可 view 手动指定。
+ * 本分类命令：polyline / rect / circle / dot / text / anglemark（另含通用图元与画布设置）
+ * 旋转：rect / text 支持 rot=角度（绕几何中心逆时针）
+ * 特性：明暗主题自适应、导出 HTML 保留图形；各分类围栏与样式互不冲突。
+ * ========================================================= */
+api.register({
+  name: '物理·基础作图',
+  version: '1.0.0',
+  author: '墨笺',
+  description: '用 ```phybase 代码块画坐标系、网格、几何图元与角度标注',
+  icon: '📐',
+
+  init: function (ctx) {
+    var NL = String.fromCharCode(10);
+    var PH = String.fromCharCode(2);
+    var STYLE_ID = 'phb-ext-style';
+    var CNAME = '物理·基础作图';
+    var ALLOWED = {};
+    'size view margin grid axes title caption line polyline rect circle dot text anglemark'.split(' ').forEach(function (z) { ALLOWED[z] = 1; });
+    var CMD_HINT = 'line / polyline / rect / circle / dot / text / anglemark';
+
+    /* ---------------- 样式（id 以 -ext-style 结尾，导出时会被收集） ---------------- */
+    var CSS = [
+      '.phb-figure{margin:1.25em 0;border:1px solid var(--line,#e6e2da);border-radius:10px;background:var(--panel,#fff);overflow:hidden}',
+      '.phb-figure svg{display:block;width:100%;height:auto;margin:0 auto}',
+      '.phb-grid{stroke:var(--line,#e6e2da);stroke-width:1;fill:none}',
+      '.phb-axis{stroke:var(--line-strong,#d8d3c8);stroke-width:1.3;fill:none}',
+      '.phb-axis-lab{fill:var(--muted,#8d8880);font:italic 11px Georgia,serif}',
+      '.phb-ln{stroke:var(--text,#221f1b);stroke-width:1.8;fill:none;stroke-linecap:round;stroke-linejoin:round}',
+      '.phb-thin{stroke:var(--text,#221f1b);stroke-width:1.2;fill:none;stroke-linecap:round}',
+      '.phb-wire{stroke:var(--text,#221f1b);stroke-width:1.7;fill:none;stroke-linecap:round;stroke-linejoin:round}',
+      '.phb-shape{fill:none;stroke:var(--text,#221f1b);stroke-width:1.8;stroke-linejoin:round;stroke-linecap:round}',
+      '.phb-fill{fill:var(--accent,#c2410c);opacity:.10;stroke:none}',
+      '.phb-aux{stroke:var(--muted,#8d8880);stroke-width:1.2;fill:none;stroke-dasharray:5 4}',
+      '.phb-hatch{stroke:var(--muted,#8d8880);stroke-width:1;fill:none}',
+      '.phb-force{stroke:var(--accent,#c2410c);stroke-width:2.1;fill:none;stroke-linecap:round}',
+      '.phb-vec{stroke:var(--link,#2563eb);stroke-width:2.1;fill:none;stroke-linecap:round}',
+      '.phb-ray{stroke:var(--accent,#c2410c);stroke-width:1.7;fill:none;stroke-linecap:round}',
+      '.phb-lens{fill:var(--accent,#c2410c);fill-opacity:.10;stroke:var(--text,#221f1b);stroke-width:1.7}',
+      '.phb-dot{fill:var(--text,#221f1b)}',
+      '.phb-lab{fill:var(--text,#221f1b);font:italic 14px Georgia,"Times New Roman",serif}',
+      '.phb-lab-b{fill:var(--accent,#c2410c);font:italic 700 14px Georgia,serif}',
+      '.phb-lab-v{fill:var(--link,#2563eb);font:italic 700 14px Georgia,serif}',
+      '.phb-txt{fill:var(--text-soft,#4a453f);font:12px -apple-system,"PingFang SC","Microsoft YaHei",sans-serif}',
+      '.phb-sym{fill:var(--muted,#8d8880);font:12px -apple-system,"PingFang SC",sans-serif}',
+      '.phb-figcap{padding:.5em .9em;border-top:1px solid var(--line,#e6e2da);text-align:center;color:var(--muted,#8d8880);font-size:.86em}',
+      '.phb-figcap b{display:block;color:var(--text-soft,#4a453f);font-weight:650;margin-bottom:.15em}',
+      '.phb-figcap p{margin:0}',
+      '.phb-errbox{border-top:1px solid var(--err-line,#f5c6c0);background:var(--err-bg,#fdecea);color:var(--err-fg,#d94f3f);padding:.5em .9em;font-size:.82em;line-height:1.6}',
+      '.phb-picker{display:flex;flex-direction:column;gap:.8em}',
+      '.phb-picker .phb-sec{font-size:12px;color:var(--muted);letter-spacing:.05em;border-bottom:1px solid var(--line);padding-bottom:.35em}',
+      '.phb-picker .phb-grid2{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:.4rem}',
+      '.phb-picker .phb-grid2 button{justify-content:flex-start;text-align:left}',
+      '.phb-help{margin:0;white-space:pre-wrap;font:11.5px/1.7 var(--font-mono,Consolas,monospace);color:var(--text-soft);background:var(--panel-2,#faf9f6);border:1px solid var(--line);border-radius:8px;padding:.7em .85em}'
+    ].join(NL);
+    (function ensureStyle() {
+      if (document.getElementById(STYLE_ID)) return;
+      var s = document.createElement('style');
+      s.id = STYLE_ID; s.textContent = CSS;
+      document.head.appendChild(s);
+    }());
+
+    /* ---------------- 基础工具 ---------------- */
+    function esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+    }
+    function n2(v) {
+      var x = Number(v);
+      if (!isFinite(x)) x = 0;
+      return String(Math.round(x * 100) / 100);
+    }
+    function num(v) {
+      if (typeof v === 'number') return v;
+      var x = parseFloat(String(v).replace(/^([+-]?\d+)\/(\d+)$/, function (a, p, q) { return String(+p / +q); }));
+      return isFinite(x) ? x : NaN;
+    }
+    function safeColor(v) {
+      if (!v || v === true) return '';
+      var s = String(v).trim();
+      if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+      if (/^[a-zA-Z][a-zA-Z0-9_-]*$/.test(s)) return s;
+      if (/^var\(--[a-z-]+(?:,\s*#[0-9a-fA-F]{3,8})?\)$/.test(s)) return s;
+      return '';
+    }
+    function stripComment(s) {
+      var q = null, out = '';
+      for (var i = 0; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (q) { out += c; if (c === q) q = null; continue; }
+        if (c === '"' || c === "'") { q = c; out += c; continue; }
+        var prev = i > 0 ? s.charAt(i - 1) : ' ';
+        if ((c === '#' || (c === '/' && s.charAt(i + 1) === '/')) && (i === 0 || /\s/.test(prev))) break;
+        out += c;
+      }
+      return out;
+    }
+    // 词法：抽出带引号的字符串（占位 \u0002N\u0002），其余按空白切词
+    function lex(line, strs) {
+      var s = stripComment(String(line == null ? '' : line));
+      var out = [], cur = '', i = 0;
+      while (i < s.length) {
+        var c = s.charAt(i);
+        if (c === '"' || c === "'") {
+          var q = c, j = i + 1, buf = '';
+          while (j < s.length && s.charAt(j) !== q) { buf += s.charAt(j); j++; }
+          cur += PH + strs.length + PH;
+          strs.push(buf);
+          i = j + 1; continue;
+        }
+        if (/\s/.test(c)) { if (cur) { out.push(cur); cur = ''; } i++; continue; }
+        cur += c; i++;
+      }
+      if (cur) out.push(cur);
+      return out;
+    }
+    function expand(t, strs) {
+      return String(t == null ? '' : t).replace(/\u0002(\d+)\u0002/g,
+        function (a, k) { return strs[+k] == null ? '' : strs[+k]; });
+    }
+    function parseOpts(toks, from, strs) {
+      var o = {};
+      for (var i = from; i < toks.length; i++) {
+        var t = expand(toks[i], strs), eq = t.indexOf('=');
+        if (eq > 0) o[t.slice(0, eq).toLowerCase()] = t.slice(eq + 1);
+        else o[t.toLowerCase()] = true;
+      }
+      return o;
+    }
+    // class + 内联 style 覆盖（presentation attribute 会被 class CSS 覆盖，故用 style）
+    function sty(o, cls) {
+      var s = '', c = safeColor(o.color);
+      if (c) s += 'stroke:' + c + ';';
+      if (o.width) { var w = num(o.width); if (isFinite(w)) s += 'stroke-width:' + w + ';'; }
+      if (o.dash) s += 'stroke-dasharray:5 4;';
+      if (o.opacity) { var op = num(o.opacity); if (isFinite(op)) s += 'opacity:' + op + ';'; }
+      return 'class="' + cls + '"' + (s ? ' style="' + s + '"' : '');
+    }
+    function fillSty(o) {
+      var c = safeColor(o.fillcolor) || 'var(--accent,#c2410c)';
+      var op = o.opacity ? num(o.opacity) : 0.10;
+      return 'fill="' + c + '" fill-opacity="' + (isFinite(op) ? op : 0.10) + '" stroke="none"';
+    }
+
+    /* ---------------- 场景 / 取景 / 坐标变换 ---------------- */
+    function newScene() {
+      return {
+        w: 520, h: 340, margin: 0.6, grid: false, axes: false,
+        title: '', caption: '', manual: null,
+        b: { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity },
+        items: [], errs: []
+      };
+    }
+    function err(sc, ln, msg) { sc.errs.push({ line: ln, msg: msg }); }
+    function addB(sc, x, y) {
+      if (!isFinite(x) || !isFinite(y)) return;
+      var b = sc.b;
+      if (x < b.x0) b.x0 = x; if (x > b.x1) b.x1 = x;
+      if (y < b.y0) b.y0 = y; if (y > b.y1) b.y1 = y;
+    }
+    function addTextB(sc, x, y, s, size) {
+      var w = String(s || '').length * (num(size) || 13) * 0.42;
+      addB(sc, x, y + 0.45);
+      addB(sc, x + w / 60, y - 0.2);
+    }
+    function makeView(sc) {
+      var x0 = sc.b.x0, x1 = sc.b.x1, y0 = sc.b.y0, y1 = sc.b.y1;
+      if (!isFinite(x0)) { x0 = 0; x1 = 10; y0 = 0; y1 = 6; }
+      if (sc.manual) { x0 = sc.manual[0]; x1 = sc.manual[1]; y0 = sc.manual[2]; y1 = sc.manual[3]; }
+      var m = sc.margin;
+      x0 -= m; x1 += m; y0 -= m; y1 += m;
+      if (x1 - x0 < 0.5) { x0 -= 0.25; x1 += 0.25; }
+      if (y1 - y0 < 0.5) { y0 -= 0.25; y1 += 0.25; }
+      var pad = 16, W = sc.w, H = sc.h;
+      var s = Math.min((W - 2 * pad) / (x1 - x0), (H - 2 * pad) / (y1 - y0));
+      return {
+        x0: x0, y0: y0, s: s, W: W, H: H,
+        ox: (W - (x1 - x0) * s) / 2,
+        oy: (H - (y1 - y0) * s) / 2
+      };
+    }
+    // 世界坐标 → 屏幕像素（y 翻转）
+    function P(V, x, y) { return [V.ox + (x - V.x0) * V.s, V.H - V.oy - (y - V.y0) * V.s]; }
+    function S(V, d) { return Math.abs(d * V.s); }
+
+    /* ---------------- SVG 绘制原语（屏幕坐标） ---------------- */
+    function ln(V, x1, y1, x2, y2, cls, o) {
+      var a = P(V, x1, y1), b = P(V, x2, y2);
+      return '<line x1="' + n2(a[0]) + '" y1="' + n2(a[1]) + '" x2="' + n2(b[0]) +
+        '" y2="' + n2(b[1]) + '" ' + sty(o || {}, cls) + '/>';
+    }
+    function poly(V, pts, cls, o, close, filled) {
+      var d = '', i, p;
+      for (i = 0; i < pts.length; i++) { p = P(V, pts[i][0], pts[i][1]); d += (i ? ' L' : 'M') + n2(p[0]) + ' ' + n2(p[1]); }
+      if (close) d += ' Z';
+      return '<path d="' + d + '" ' + (filled ? fillSty(o || {}) : sty(o || {}, cls)) + '/>';
+    }
+    function circ(V, cx, cy, r, cls, o, filled) {
+      var p = P(V, cx, cy), rr = S(V, r);
+      return '<circle cx="' + n2(p[0]) + '" cy="' + n2(p[1]) + '" r="' + n2(rr) + '" ' +
+        (filled ? fillSty(o || {}) : sty(o || {}, cls)) + '/>';
+    }
+    function rectSvg(V, x, y, w, h, cls, o, filled) {
+      return poly(V, [[x, y], [x + w, y], [x + w, y + h], [x, y + h]], cls, o, true, filled);
+    }
+    // rot= 旋转包装：世界坐标下逆时针 deg 度，绕屏幕点 (px,py)；SVG 顺时针为正故取负
+    function rotWrap(o, px, py, inner) {
+      var deg = num(o.rot);
+      if (!isFinite(deg) || !deg) return inner;
+      return '<g transform="rotate(' + n2(-deg) + ' ' + n2(px) + ' ' + n2(py) + ')">' + inner + '</g>';
+    }
+    function textSvg(V, x, y, s, cls, o) {
+      var p = P(V, x, y), size = num(o.size) || 13;
+      var col = safeColor(o.color), anchor = o.align || 'start';
+      var dy = 0;
+      if (o.pos === 'n') { dy = -8; anchor = 'middle'; }
+      else if (o.pos === 's') { dy = 15; anchor = 'middle'; }
+      else if (o.pos === 'e') { anchor = 'start'; dy = 4; }
+      else if (o.pos === 'w') { anchor = 'end'; dy = 4; }
+      else if (o.pos === 'ne') { dy = -6; anchor = 'start'; }
+      else if (o.pos === 'nw') { dy = -6; anchor = 'end'; }
+      return '<text x="' + n2(p[0]) + '" y="' + n2(p[1] + dy) + '" class="' + cls +
+        '" font-size="' + n2(size) + '" text-anchor="' + anchor + '"' +
+        (col ? ' style="fill:' + col + '"' : '') + '>' + esc(s) + '</text>';
+    }
+    // 箭头：屏幕坐标下的实心三角，size 为像素
+    function arrowHead(V, ax, ay, bx, by, color, size, back) {
+      var a = P(V, ax, ay), b = P(V, bx, by);
+      var dx = b[0] - a[0], dy = b[1] - a[1], L = Math.sqrt(dx * dx + dy * dy);
+      if (L < 0.01) return '';
+      var ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
+      var tipX = b[0], tipY = b[1];
+      if (back) { tipX = a[0]; tipY = a[1]; ux = -ux; uy = -uy; }
+      var h = size || 9, w = (size || 9) * 0.48;
+      var q1x = tipX - ux * h + nx * w, q1y = tipY - uy * h + ny * w;
+      var q2x = tipX - ux * h - nx * w, q2y = tipY - uy * h - ny * w;
+      return '<polygon points="' + n2(tipX) + ',' + n2(tipY) + ' ' + n2(q1x) + ',' + n2(q1y) +
+        ' ' + n2(q2x) + ',' + n2(q2y) + '" fill="' + color + '"/>';
+    }
+    function lineWithArrow(V, x1, y1, x2, y2, cls, o, color) {
+      var col = safeColor(o.color) || color || 'var(--text,#221f1b)';
+      var s = ln(V, x1, y1, x2, y2, cls, o);
+      s += arrowHead(V, x1, y1, x2, y2, col, num(o.arrowsize) || 9, false);
+      if (o.arrow === 'both' || o.botharrow) s += arrowHead(V, x1, y1, x2, y2, col, num(o.arrowsize) || 9, true);
+      return s;
+    }
+    // 沿线段画斜线阴影（地面 / 镜背 / 墙面）；dir=1 表示法线朝屏幕下方
+    function hatch(V, x1, y1, x2, y2, step, h, flip, cls) {
+      var a = P(V, x1, y1), b = P(V, x2, y2);
+      var dx = b[0] - a[0], dy = b[1] - a[1], L = Math.sqrt(dx * dx + dy * dy);
+      if (L < 1) return '';
+      var ux = dx / L, uy = dy / L, nx = -uy, ny = ux;
+      if (flip) { nx = -nx; ny = -ny; }
+      var s = '';
+      for (var d = step * 0.55; d < L - 1; d += step) {
+        var px = a[0] + ux * d, py = a[1] + uy * d;
+        var ex = px + nx * h - ux * h * 0.7, ey = py + ny * h - uy * h * 0.7;
+        s += '<line x1="' + n2(px) + '" y1="' + n2(py) + '" x2="' + n2(ex) +
+          '" y2="' + n2(ey) + '" class="' + (cls || 'phb-hatch') + '"/>';
+      }
+      return s;
+    }
+    // 两点连线的屏幕几何框架（电学元件复用）
+    function frame(V, x1, y1, x2, y2) {
+      var a = P(V, x1, y1), b = P(V, x2, y2);
+      var dx = b[0] - a[0], dy = b[1] - a[1], L = Math.sqrt(dx * dx + dy * dy) || 1;
+      var ux = dx / L, uy = dy / L;
+      return {
+        a: a, b: b, L: L, u: [ux, uy], n: [-uy, ux],
+        m: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]
+      };
+    }
+    function segPx(p1, p2, cls, o) {
+      return '<line x1="' + n2(p1[0]) + '" y1="' + n2(p1[1]) + '" x2="' + n2(p2[0]) +
+        '" y2="' + n2(p2[1]) + '" ' + sty(o || {}, cls) + '/>';
+    }
+    function shift(m, u, n, along, perp) {
+      return [m[0] + u[0] * along + n[0] * perp, m[1] + u[1] * along + n[1] * perp];
+    }
+    function dotPx(p, r, cls) {
+      return '<circle cx="' + n2(p[0]) + '" cy="' + n2(p[1]) + '" r="' + n2(r) + '" class="' + (cls || 'phb-dot') + '"/>';
+    }
+
+    /* ---------------- 命令解析 ---------------- */
+    function need(sc, toks, k, ln, cmd) {
+      var v = num(expand(toks[k], sc._strs));
+      if (!isFinite(v)) err(sc, ln, cmd + '：第 ' + k + ' 个参数不是数字「' + expand(toks[k], sc._strs) + '」');
+      return v;
+    }
+    function parseLine(sc, raw, ln) {
+      var strs = [];
+      sc._strs = strs;
+      var toks = lex(raw, strs);
+      if (!toks.length) return;
+      var cmd = expand(toks[0], strs).toLowerCase();
+      if (!ALLOWED[cmd]) {
+        err(sc, ln, '「' + CNAME + '」不支持命令「' + cmd + '」；可用：' + CMD_HINT);
+        return;
+      }
+      var o, i, pts, x, y, w, h, x1, y1, x2, y2, r, cx, cy, dx, dy, lab;
+
+      // --- 画布设置 ---
+      if (cmd === 'size') {
+        var m = expand(toks[1] || '', strs).match(/^(\d+(?:\.\d+)?)\s*[xX×]\s*(\d+(?:\.\d+)?)$/);
+        if (!m) { err(sc, ln, 'size 格式应为 宽x高，如 size 520x340'); return; }
+        sc.w = +m[1]; sc.h = +m[2]; return;
+      }
+      if (cmd === 'view') {
+        var vv = [];
+        for (i = 0; i < 4; i++) vv.push(need(sc, toks, i + 1, ln, 'view'));
+        if (vv.every(function (z) { return isFinite(z); })) sc.manual = vv;
+        return;
+      }
+      if (cmd === 'margin') { var mg = need(sc, toks, 1, ln, 'margin'); if (isFinite(mg)) sc.margin = mg; return; }
+      if (cmd === 'grid') { sc.grid = expand(toks[1] || 'on', strs).toLowerCase() !== 'off'; return; }
+      if (cmd === 'axes') { sc.axes = expand(toks[1] || 'on', strs).toLowerCase() !== 'off'; return; }
+      if (cmd === 'title') { sc.title = expand(toks.slice(1).join(' '), strs); return; }
+      if (cmd === 'caption') { sc.caption = expand(toks.slice(1).join(' '), strs); return; }
+
+      // --- 通用图元 ---
+      if (cmd === 'line' || cmd === 'ray' || cmd === 'normal' || cmd === 'axis' ||
+          cmd === 'rope' || cmd === 'wall' || cmd === 'ground' || cmd === 'mirror') {
+        x1 = need(sc, toks, 1, ln, cmd); y1 = need(sc, toks, 2, ln, cmd);
+        x2 = need(sc, toks, 3, ln, cmd); y2 = need(sc, toks, 4, ln, cmd);
+        o = parseOpts(toks, 5, strs);
+        addB(sc, x1, y1); addB(sc, x2, y2);
+        if (o.label) addTextB(sc, (x1 + x2) / 2, (y1 + y2) / 2, o.label, 13);
+        sc.items.push({ c: cmd, a: [x1, y1, x2, y2], o: o }); return;
+      }
+      if (cmd === 'polyline' || cmd === 'wire') {
+        pts = [];
+        for (i = 1; i + 1 < toks.length && isFinite(num(expand(toks[i], strs))) &&
+             isFinite(num(expand(toks[i + 1], strs))); i += 2) {
+          pts.push([num(expand(toks[i], strs)), num(expand(toks[i + 1], strs))]);
+        }
+        if (pts.length < 2) { err(sc, ln, cmd + '：至少要有两个点'); return; }
+        o = parseOpts(toks, i, strs);
+        pts.forEach(function (p) { addB(sc, p[0], p[1]); });
+        if (o.label) addTextB(sc, pts[0][0], pts[0][1], o.label, 13);
+        sc.items.push({ c: cmd, a: [pts], o: o }); return;
+      }
+      if (cmd === 'rect' || cmd === 'block') {
+        x = need(sc, toks, 1, ln, cmd); y = need(sc, toks, 2, ln, cmd);
+        w = need(sc, toks, 3, ln, cmd); h = need(sc, toks, 4, ln, cmd);
+        o = parseOpts(toks, 5, strs);
+        // rot= 时取景框按旋转后的四个角计算
+        var rotDeg = num(o.rot);
+        if (isFinite(rotDeg) && rotDeg) {
+          var ctrX = x + w / 2, ctrY = y + h / 2;
+          var rr = rotDeg * Math.PI / 180, rcs = Math.cos(rr), rsn = Math.sin(rr);
+          [[x, y], [x + w, y], [x + w, y + h], [x, y + h]].forEach(function (c) {
+            var ddx = c[0] - ctrX, ddy = c[1] - ctrY;
+            addB(sc, ctrX + ddx * rcs - ddy * rsn, ctrY + ddx * rsn + ddy * rcs);
+          });
+        } else { addB(sc, x, y); addB(sc, x + w, y + h); }
+        lab = o.label ? o.label : '';
+        if (lab) addTextB(sc, x + w / 2, y + h / 2, lab, 14);
+        sc.items.push({ c: cmd, a: [x, y, w, h], o: o }); return;
+      }
+      if (cmd === 'circle' || cmd === 'pulley' || cmd === 'lamp') {
+        cx = need(sc, toks, 1, ln, cmd); cy = need(sc, toks, 2, ln, cmd);
+        r = need(sc, toks, 3, ln, cmd);
+        o = parseOpts(toks, 4, strs);
+        addB(sc, cx - r, cy - r); addB(sc, cx + r, cy + r);
+        if (o.label) addTextB(sc, cx, cy, o.label, 13);
+        sc.items.push({ c: cmd, a: [cx, cy, r], o: o }); return;
+      }
+      if (cmd === 'dot') {
+        x = need(sc, toks, 1, ln, cmd); y = need(sc, toks, 2, ln, cmd);
+        o = parseOpts(toks, 3, strs);
+        addB(sc, x, y);
+        if (o.label) addTextB(sc, x, y, o.label, 13);
+        sc.items.push({ c: cmd, a: [x, y], o: o }); return;
+      }
+      if (cmd === 'text') {
+        x = need(sc, toks, 1, ln, cmd); y = need(sc, toks, 2, ln, cmd);
+        lab = expand(toks[3] || '', strs);
+        o = parseOpts(toks, 4, strs);
+        if (!lab) { err(sc, ln, 'text：缺少文字，用引号括起来'); return; }
+        addB(sc, x, y); addTextB(sc, x, y, lab, o.size || 13);
+        sc.items.push({ c: cmd, a: [x, y, lab], o: o }); return;
+      }
+      if (cmd === 'force' || cmd === 'velocity' || cmd === 'vector') {
+        x = need(sc, toks, 1, ln, cmd); y = need(sc, toks, 2, ln, cmd);
+        dx = need(sc, toks, 3, ln, cmd); dy = need(sc, toks, 4, ln, cmd);
+        lab = toks[5] && !/^[a-z_]+=/i.test(expand(toks[5], strs)) ? expand(toks[5], strs) : '';
+        o = parseOpts(toks, lab ? 6 : 5, strs);
+        if (o.label) lab = o.label;
+        addB(sc, x, y); addB(sc, x + dx, y + dy);
+        if (lab) addTextB(sc, x + dx, y + dy, lab, 14);
+        sc.items.push({ c: cmd, a: [x, y, dx, dy, lab], o: o }); return;
+      }
+      if (cmd === 'ramp') {
+        x = need(sc, toks, 1, ln, cmd); y = need(sc, toks, 2, ln, cmd);
+        w = need(sc, toks, 3, ln, cmd); h = need(sc, toks, 4, ln, cmd);
+        o = parseOpts(toks, 5, strs);
+        addB(sc, x, y); addB(sc, x + w, y + h); addB(sc, x, y + h);
+        sc.items.push({ c: cmd, a: [x, y, w, h], o: o }); return;
+      }
+      if (cmd === 'spring') {
+        x1 = need(sc, toks, 1, ln, cmd); y1 = need(sc, toks, 2, ln, cmd);
+        x2 = need(sc, toks, 3, ln, cmd); y2 = need(sc, toks, 4, ln, cmd);
+        o = parseOpts(toks, 5, strs);
+        addB(sc, x1, y1); addB(sc, x2, y2);
+        sc.items.push({ c: cmd, a: [x1, y1, x2, y2], o: o }); return;
+      }
+      if (cmd === 'lens') {
+        cx = need(sc, toks, 1, ln, cmd); cy = need(sc, toks, 2, ln, cmd);
+        h = need(sc, toks, 3, ln, cmd);
+        var kind = expand(toks[4] || 'convex', strs).toLowerCase();
+        o = parseOpts(toks, 5, strs); o.kind = (kind === 'concave' || kind === '凹') ? 'concave' : 'convex';
+        var f = o.f ? num(o.f) : h * 0.85;
+        addB(sc, cx - 2.6 * f, cy - h); addB(sc, cx + 2.6 * f, cy + h);
+        sc.items.push({ c: cmd, a: [cx, cy, h, f], o: o }); return;
+      }
+      if (cmd === 'battery' || cmd === 'resistor' || cmd === 'switch' || cmd === 'capacitor') {
+        x1 = need(sc, toks, 1, ln, cmd); y1 = need(sc, toks, 2, ln, cmd);
+        x2 = need(sc, toks, 3, ln, cmd); y2 = need(sc, toks, 4, ln, cmd);
+        o = parseOpts(toks, 5, strs);
+        addB(sc, x1, y1); addB(sc, x2, y2);
+        sc.items.push({ c: cmd, a: [x1, y1, x2, y2], o: o }); return;
+      }
+      if (cmd === 'meter') {
+        cx = need(sc, toks, 1, ln, cmd); cy = need(sc, toks, 2, ln, cmd);
+        var mk = expand(toks[3] || 'A', strs).toUpperCase();
+        o = parseOpts(toks, 4, strs); o.kind = mk;
+        addB(sc, cx - 0.55, cy - 0.55); addB(sc, cx + 0.55, cy + 0.55);
+        sc.items.push({ c: cmd, a: [cx, cy], o: o }); return;
+      }
+      if (cmd === 'field') {
+        x = need(sc, toks, 1, ln, cmd); y = need(sc, toks, 2, ln, cmd);
+        w = need(sc, toks, 3, ln, cmd); h = need(sc, toks, 4, ln, cmd);
+        var fk = expand(toks[5] || 'in', strs).toLowerCase();
+        o = parseOpts(toks, 6, strs);
+        o.kind = (fk === 'out' || fk === '·' || fk === 'dot') ? 'out' : 'in';
+        addB(sc, x, y); addB(sc, x + w, y + h);
+        sc.items.push({ c: cmd, a: [x, y, w, h], o: o }); return;
+      }
+      if (cmd === 'anglemark') {
+        cx = need(sc, toks, 1, ln, cmd); cy = need(sc, toks, 2, ln, cmd);
+        r = need(sc, toks, 3, ln, cmd);
+        var a1 = need(sc, toks, 4, ln, cmd), a2 = need(sc, toks, 5, ln, cmd);
+        // 第 6 个词既可以是直接写的 "θ"，也可以是 label="θ"
+        lab = toks[6] && !/^[a-z_]+=/i.test(expand(toks[6], strs)) ? expand(toks[6], strs) : '';
+        o = parseOpts(toks, lab ? 7 : 6, strs);
+        if (o.label) lab = o.label;
+        addB(sc, cx - r, cy - r); addB(sc, cx + r, cy + r);
+        sc.items.push({ c: cmd, a: [cx, cy, r, a1, a2, lab], o: o }); return;
+      }
+      err(sc, ln, '未知命令「' + cmd + '」（可用：line / polyline / rect / circle / dot / text / anglemark）');
+    }
+
+    /* ---------------- 图元绘制 ---------------- */
+    function drawItem(sc, it, V) {
+      var a = it.a, o = it.o || {}, s = '', i, f, p, q, pts, lab;
+      var TEXT = 'var(--text,#221f1b)', ACC = 'var(--accent,#c2410c)', LINK = 'var(--link,#2563eb)';
+      var col = safeColor(o.color) || TEXT;
+
+      switch (it.c) {
+        case 'line':
+          s += o.arrow ? lineWithArrow(V, a[0], a[1], a[2], a[3], 'phb-ln', o, TEXT) : ln(V, a[0], a[1], a[2], a[3], 'phb-ln', o);
+          break;
+        case 'polyline':
+        case 'wire':
+          pts = a[0];
+          s += poly(V, pts, it.c === 'wire' ? 'phb-wire' : 'phb-ln', o, false, false);
+          if (o.arrow) {
+            var lp = pts[pts.length - 2], ep = pts[pts.length - 1];
+            s += arrowHead(V, lp[0], lp[1], ep[0], ep[1], safeColor(o.color) || TEXT, 9, false);
+          }
+          break;
+        case 'rect': {
+          var rc = P(V, a[0] + a[2] / 2, a[1] + a[3] / 2);
+          var rs = (o.fill ? rectSvg(V, a[0], a[1], a[2], a[3], '', o, true) : '') +
+            rectSvg(V, a[0], a[1], a[2], a[3], 'phb-shape', o, false);
+          s += rotWrap(o, rc[0], rc[1], rs);
+          break;
+        }
+        case 'circle':
+          if (o.fill) s += circ(V, a[0], a[1], a[2], '', o, true);
+          s += circ(V, a[0], a[1], a[2], 'phb-shape', o, false);
+          break;
+        case 'dot':
+          p = P(V, a[0], a[1]);
+          s += '<circle cx="' + n2(p[0]) + '" cy="' + n2(p[1]) + '" r="' + n2(num(o.r) || 3) +
+            '" fill="' + col + '"/>';
+          if (o.label) s += textSvg(V, a[0], a[1], o.label, 'phb-lab', o);
+          break;
+        case 'text': {
+          var tc = P(V, a[0], a[1]);
+          s += rotWrap(o, tc[0], tc[1], textSvg(V, a[0], a[1], a[2], 'phb-txt', o));
+          break;
+        }
+        case 'anglemark': {
+          var acx = a[0], acy = a[1], ar = a[2], aa1 = a[3], aa2 = a[4];
+          var ap = P(V, acx, acy), arpx = S(V, ar);
+          var rad1 = -aa1 * Math.PI / 180, rad2 = -aa2 * Math.PI / 180;
+          var q1 = [ap[0] + arpx * Math.cos(rad1), ap[1] + arpx * Math.sin(rad1)];
+          var q2 = [ap[0] + arpx * Math.cos(rad2), ap[1] + arpx * Math.sin(rad2)];
+          var large = Math.abs(aa2 - aa1) > 180 ? 1 : 0;
+          var sweep = aa2 > aa1 ? 0 : 1;   // 世界角逆时针 → 屏幕坐标下为反向
+          s += '<path d="M' + n2(q1[0]) + ' ' + n2(q1[1]) + ' A' + n2(arpx) + ' ' + n2(arpx) +
+            ' 0 ' + large + ' ' + sweep + ' ' + n2(q2[0]) + ' ' + n2(q2[1]) + '" class="phb-aux" style="stroke-dasharray:none"/>';
+          if (a[5]) {
+            var midA = (aa1 + aa2) / 2 * Math.PI / 180;
+            s += textSvg(V, acx + ar * 1.35 * Math.cos(midA), acy + ar * 1.35 * Math.sin(midA), a[5], 'phb-lab', { pos: 'n' });
+          }
+          break;
+        }
+      }
+      // 统一标签（line / ray / rope / ground / mirror / circle / 元件等）
+      var noAuto = /^(block|resistor|text|force|velocity|vector|dot|anglemark|lens|meter)$/.test(it.c);
+      if (o.label && !noAuto) {
+        if (a.length >= 4 && typeof a[0] === 'number') {
+          s += textSvg(V, (a[0] + a[2]) / 2, (a[1] + a[3]) / 2, o.label, 'phb-txt', { pos: 'n' });
+        } else if (a.length === 3 && typeof a[0] === 'number') {   // circle / pulley / lamp
+          s += textSvg(V, a[0], a[1], o.label, 'phb-lab', { pos: 'n' });
+        }
+      }
+      return s;
+    }
+
+    /* ---------------- 网格与坐标轴 ---------------- */
+    function gridSvg(sc, V) {
+      var s = '', stepWorld = niceStep((V.W / V.s) / 8), i, v;
+      function niceStep(r) {
+        var e = Math.pow(10, Math.floor(Math.log(r) / Math.LN10)), f = r / e;
+        return (f < 1.5 ? 1 : f < 3 ? 2 : f < 7 ? 5 : 10) * e;
+      }
+      var x0 = V.x0, x1 = V.x0 + (V.W - 2 * V.ox) / V.s;
+      var y0 = V.y0, y1 = V.y0 + (V.H - 2 * V.oy) / V.s;
+      for (v = Math.ceil(x0 / stepWorld) * stepWorld; v <= x1; v += stepWorld) {
+        var p1 = P(V, v, y0), p2 = P(V, v, y1);
+        s += '<line x1="' + n2(p1[0]) + '" y1="' + n2(p1[1]) + '" x2="' + n2(p2[0]) + '" y2="' + n2(p2[1]) + '" class="phb-grid"/>';
+        if (sc.axes) s += '<text x="' + n2(p1[0]) + '" y="' + n2(V.H - V.oy + 13) + '" class="phb-axis-lab" text-anchor="middle">' + n2(v) + '</text>';
+      }
+      for (v = Math.ceil(y0 / stepWorld) * stepWorld; v <= y1; v += stepWorld) {
+        var q1 = P(V, x0, v), q2 = P(V, x1, v);
+        s += '<line x1="' + n2(q1[0]) + '" y1="' + n2(q1[1]) + '" x2="' + n2(q2[0]) + '" y2="' + n2(q2[1]) + '" class="phb-grid"/>';
+        if (sc.axes) s += '<text x="' + n2(V.ox - 7) + '" y="' + n2(q1[1] + 4) + '" class="phb-axis-lab" text-anchor="end">' + n2(v) + '</text>';
+      }
+      if (sc.axes) {
+        if (y0 <= 0 && 0 <= y1) {   // x 轴（y=0）
+          var ax1 = P(V, x0, 0), ax2 = P(V, x1, 0);
+          s += '<line x1="' + n2(ax1[0]) + '" y1="' + n2(ax1[1]) + '" x2="' + n2(ax2[0]) +
+            '" y2="' + n2(ax2[1]) + '" class="phb-axis"/>';
+        }
+        if (x0 <= 0 && 0 <= x1) {   // y 轴（x=0）
+          var ay1 = P(V, 0, y0), ay2 = P(V, 0, y1);
+          s += '<line x1="' + n2(ay1[0]) + '" y1="' + n2(ay1[1]) + '" x2="' + n2(ay2[0]) +
+            '" y2="' + n2(ay2[1]) + '" class="phb-axis"/>';
+        }
+      }
+      return s;
+    }
+
+    /* ---------------- 渲染整幅图 ---------------- */
+    function renderFigure(lines) {
+      var sc = newScene(), i;
+      for (i = 0; i < lines.length; i++) {
+        try { parseLine(sc, lines[i], i + 1); }
+        catch (e) { err(sc, i + 1, '解析异常：' + (e && e.message ? e.message : e)); }
+      }
+      var V = makeView(sc);
+      var body = '';
+      if (sc.grid || sc.axes) body += gridSvg(sc, V);
+      for (i = 0; i < sc.items.length; i++) {
+        try { body += drawItem(sc, sc.items[i], V); }
+        catch (e) { err(sc, 0, '绘制异常：' + (e && e.message ? e.message : e)); }
+      }
+      var svg = '<div class="phb-figure"><svg viewBox="0 0 ' + n2(V.W) + ' ' + n2(V.H) +
+        '" xmlns="http://www.w3.org/2000/svg" role="img" preserveAspectRatio="xMinYMin meet">' +
+        (sc.title ? '<title>' + esc(sc.title) + '</title>' : '') + body + '</svg>';
+      if (sc.title || sc.caption) {
+        svg += '<div class="phb-figcap">' + (sc.title ? '<b>' + esc(sc.title) + '</b>' : '') +
+          (sc.caption ? '<p>' + (ctx && ctx.md && ctx.md.inline ? ctx.md.inline(sc.caption) : esc(sc.caption)) + '</p>' : '') +
+          '</div>';
+      }
+      if (sc.errs.length) {
+        svg += '<div class="phb-errbox"><b>⚠ 基础图有 ' + sc.errs.length + ' 处问题：</b><br>' +
+          sc.errs.slice(0, 8).map(function (e) {
+            return esc((e.line ? '第 ' + e.line + ' 行：' : '') + e.msg);
+          }).join('<br>') + '</div>';
+      }
+      return svg + '</div>';
+    }
+
+    /* ---------------- 语法隔离：改写 phybase 围栏为私有块 ----------------
+     * 代码高亮扩展会抢走所有 ``` 围栏，故在 preTransform 阶段转换，
+     * 与扩展加载顺序无关；普通围栏整段原样跳过，避免误伤示例代码。
+     */
+    var RE_OPEN_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(phybase|physbase)\b([^`~]*)$/i;
+    var RE_ANY_FENCE = /^\s{0,3}(`{3,}|~{3,})/;
+    var RE_CLOSE = /^\s{0,3}(`{3,}|~{3,})\s*$/;
+    var RE_OPEN_CTR = /^\s{0,3}:::phybase\b(.*)$/i;
+    var RE_CLOSE_CTR = /^\s{0,3}:::\s*$/;
+
+    ctx.md.preTransform(function (text) {
+      var src = String(text == null ? '' : text).split('\n');
+      var out = [], i = 0;
+      while (i < src.length) {
+        var line = src[i], m = line.match(RE_OPEN_FENCE);
+        if (m) {
+          var ch = m[1].charAt(0), nn = m[1].length, j = i + 1;
+          while (j < src.length) {
+            var cm = src[j].match(RE_CLOSE);
+            if (cm && cm[1].charAt(0) === ch && cm[1].length >= nn) break;
+            j++;
+          }
+          if (j < src.length) {
+            out.push('%%%phybase ' + (m[3] || '').trim());
+            for (var k = i + 1; k < j; k++) out.push(src[k]);
+            out.push('%%%endphybase');
+            i = j + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        var mc = line.match(RE_OPEN_CTR);
+        if (mc) {
+          var j2 = i + 1;
+          while (j2 < src.length && !RE_CLOSE_CTR.test(src[j2])) j2++;
+          if (j2 < src.length) {
+            out.push('%%%phybase ' + (mc[1] || '').trim());
+            for (var k2 = i + 1; k2 < j2; k2++) out.push(src[k2]);
+            out.push('%%%endphybase');
+            i = j2 + 1; continue;
+          }
+          out.push(line); i++; continue;
+        }
+        var mf = line.match(RE_ANY_FENCE);
+        if (mf) {
+          var ch2 = mf[1].charAt(0), n2v = mf[1].length;
+          out.push(line); i++;
+          while (i < src.length) {
+            out.push(src[i]);
+            var cc = src[i].match(RE_CLOSE);
+            if (cc && cc[1].charAt(0) === ch2 && cc[1].length >= n2v) { i++; break; }
+            i++;
+          }
+          continue;
+        }
+        out.push(line); i++;
+      }
+      return out.join('\n');
+    });
+
+    ctx.md.addBlockRule({
+      test: function (lines, i) {
+        if (!/^\s{0,3}%%%phybase(?:\s|$)/.test(lines[i])) return 0;
+        var j = i + 1;
+        while (j < lines.length && !/^\s{0,3}%%%endphybase\s*$/.test(lines[j])) j++;
+        return j < lines.length ? j - i + 1 : 0;
+      },
+      render: function (lines, i, n) {
+        var head = lines[i].match(/^\s{0,3}%%%phybase\s*(.*)$/);
+        var body = [];
+        if (head && head[1]) {
+          var info = head[1].trim();
+          var segs = info.split(/\s+(?=(?:size|scale|view|margin|grid|axes|title|caption)\b)/i);
+          for (var q = 0; q < segs.length; q++) if (segs[q]) body.push(segs[q]);
+        }
+        for (var k = i + 1; k < i + n - 1; k++) body.push(lines[k]);
+        try { return renderFigure(body); }
+        catch (e) {
+          return '<div class="phb-figure"><div class="phb-errbox"><b>⚠ 基础图渲染失败：</b>' +
+            esc(e && e.message ? e.message : e) + '</div></div>';
+        }
+      }
+    });
+
+    /* ---------------- 工具栏：示例模板与语法速查 ---------------- */
+    var TPL = {
+      blank: [
+        '# 基础作图：世界坐标 y 轴朝上；一行一条命令',
+        'size 520x300',
+        'grid on',
+        'axes on',
+        'line 1 1 7 1 arrow label="x"',
+        'rect 1.5 2 2 1.4 fill',
+        'circle 6 3 0.9 label="O"',
+        'dot 4 2 label="P"',
+        'text 4 4.2 "任意示意图"',
+        'title 基础图元'
+      ].join(NL),
+      coords: [
+        'size 600x360',
+        'view -1 9 -1 6',
+        'grid on',
+        'axes on',
+        'line 0 3 2 3 arrow',
+        'line 2 3 4 3 arrow=both dash label="双向"',
+        'rect 3 4 1.5 0.9 fill',
+        'circle 1 4.5 0.6 label="O"',
+        'anglemark 0 0 1.2 0 60 "α"',
+        'text 5 4.5 "坐标与角度"',
+        'title 网格 · 坐标轴 · 角度标注'
+      ].join(NL)
+    };
+    var LABELS = {
+      blank: '基础图元（入门）',
+      coords: '网格 · 坐标轴 · 角度'
+    };
+    var HELP = [
+      '写法   ```phybase 开始、``` 结束；或 :::phybase … ::: 容器',
+      '       一行一条命令；# 或 // 开头是注释；命令名不区分大小写',
+      '坐标   世界坐标，y 轴朝上为正；不写 view 时按内容自动等比取景',
+      '',
+      '画布设置  size 520x340        画布像素大小',
+      '          view 0 10 0 6       手动指定显示范围（x1 x2 y1 y2）',
+      '          margin 0.6          内容到边缘留白（世界单位）',
+      '          grid on / axes on   显示网格 / 坐标轴',
+      '          title 图名          顶部标题    caption 图注    底部图注',
+      '',
+      '图元命令',
+      '  line x1 y1 x2 y2            直线；加 arrow 单箭头、arrow=both 双箭头',
+      '  polyline x1 y1 x2 y2 …      折线（点数不限）',
+      '  rect x y w h                矩形；(x,y) 为左下角，w / h 为宽高',
+      '  circle cx cy r              圆        dot x y   实心小圆点',
+      '  text x y "文字"             文字；(x,y) 为锚点',
+      '  anglemark cx cy r a1 a2 "θ" 角度弧：圆心、半径、起止角（度，逆时针）',
+      '',
+      '通用选项（跟在命令后，顺序随意）',
+      '  color=red 或 color=#c2410c  颜色       width=2    线宽',
+      '  dash     虚线               fill       填充（rect / circle）',
+      '  opacity=0.15               整体透明度  size=13    文字 / 箭头大小',
+      '  label="…"   标注文字        pos=n|s|e|w|ne|nw   标注方位',
+      '',
+      '旋转  rect / text 支持 rot=角度：绕几何中心逆时针旋转（负值顺时针）',
+      '      例  rect 2 1 3 1.6 fill rot=20   →  斜放 20° 的填充矩形',
+      '',
+      '注    本扩展只含通用图元；力学 / 光学 / 电学 / 电磁场请用对应分类扩展'
+    ].join(NL);
+
+    function insertTpl(h, key) {
+      var tpl = TPL[key];
+      if (!tpl) return;
+      h.insertText(NL + NL + '```phybase' + NL + tpl + NL + '```' + NL + NL);
+      ctx.app.toast('已插入「' + LABELS[key] + '」');
+    }
+    function pickerHtml() {
+      var keys = ['blank', 'coords'];
+      var btns = keys.map(function (k) {
+        return '<button class="btn ghost small" data-phy="' + k + '">' + LABELS[k] + '</button>';
+      }).join('');
+      return '<div class="phb-picker">' +
+        '<div class="phb-sec">插入示例</div><div class="phb-grid2">' + btns + '</div>' +
+        '<div class="phb-sec">语法速查</div><pre class="phb-help">' + esc(HELP) + '</pre>' +
+        '</div>';
+    }
+    ctx.ui.addButton({
+      id: 'physbase',
+      icon: '📐',
+      title: '物理·基础作图（示例 / 语法速查）',
+      onClick: function (h) {
+        var body = ctx.app.panel(pickerHtml(), '物理·基础作图');
+        body.onclick = function (ev) {
+          if (!ev.target || !ev.target.closest) return;
+          var b = ev.target.closest('[data-phy]');
+          if (!b) return;
+          insertTpl(h, b.getAttribute('data-phy'));
+          var mask = document.getElementById('extCustomMask');
+          if (mask) mask.classList.remove('show');
+        };
+      }
+    });
+    ctx.ui.addCommand({
+      id: 'physbase-blank', key: 'b', ctrl: true, alt: true,
+      onClick: function (h) { insertTpl(h, 'blank'); }
+    });
+  },
+
+  /* 停用 / 移除时清理注入的样式 */
+  dispose: function () {
+    var s = document.getElementById('phb-ext-style');
+    if (s && s.parentNode) s.parentNode.removeChild(s);
+    var m = document.getElementById('extCustomMask');
+    if (m) m.classList.remove('show');
+  }
+});
