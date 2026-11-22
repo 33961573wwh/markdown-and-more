@@ -1,5 +1,9 @@
 # UPD
 
+## 2026.11.22
+
+- 增加物理扩展
+
 ## 2026.11.17
 
 - 增加扩展说明
@@ -14,6 +18,11 @@
 
 # 扩展
 
+- `ext-phy-base.mext`：基础物理图元
+- `ext-phy-circult.mext`：物理电路
+- `ext-phy-field.mext`：物理电磁场
+- `ext-phy-mechanics.mext`：物理力学
+- `ext-phy-optics.mext`：物理光学
 - `ext-admonition.mext`：容器块
 - `ext-chart.mext`：统计图
 - `ext-emoji.mext`：emoji
